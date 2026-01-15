@@ -5,29 +5,21 @@ import {
   Settings as SettingsIcon, 
   Calendar as CalendarIcon, 
   Trash2,
-  TrendingUp,
   ChevronLeft,
   ChevronRight,
   Info,
   XCircle,
   LayoutGrid,
   List as ListIcon,
-  AlertCircle,
   Clock,
-  History,
-  ShieldCheck,
   Wallet,
-  Receipt,
   ArrowDownCircle,
   ArrowUpCircle,
-  Share,
-  Download,
   PlusCircle,
   CalendarDays,
   Gift,
   MinusCircle
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { OTRecord, UserSettings, OTType } from './types.ts';
 import { OT_TYPES, DEFAULT_SETTINGS, MONTHS_TH } from './constants.ts';
 
@@ -43,7 +35,6 @@ const parseLocalDate = (dateStr: string) => {
   return new Date(y, m - 1, d);
 };
 
-// Moved helper components to the top and made children optional to avoid hoisting issues and fix TS missing prop error
 const SettingSection = ({ title, children }: { title: string, children?: React.ReactNode }) => (
   <div className="space-y-3">
     <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-4">{title}</h4>
@@ -95,9 +86,7 @@ const App: React.FC = () => {
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [recordToDelete, setRecordToDelete] = useState<OTRecord | null>(null);
   const [selectedDayInfo, setSelectedDayInfo] = useState<{ dateStr: string, records: OTRecord[] } | null>(null);
-  const [showIOSInstall, setShowIOSInstall] = useState(false);
 
-  // State for adding custom monthly salary
   const [customSalaryMonth, setCustomSalaryMonth] = useState(currentViewMonth);
   const [customSalaryAmount, setCustomSalaryAmount] = useState(0);
 
@@ -110,17 +99,6 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
-    
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
-    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
-    
-    if (isIOS && !isStandalone) {
-      const hasClosedPrompt = sessionStorage.getItem('ios_prompt_closed');
-      if (!hasClosedPrompt) {
-        setShowIOSInstall(true);
-      }
-    }
-
     return () => clearInterval(timer);
   }, []);
 
@@ -159,12 +137,14 @@ const App: React.FC = () => {
     };
   }, [currentViewMonth]);
 
+  // UPDATE: Include food allowance in social security calculation base as requested
   const calculatedSocialSecurity = useMemo(() => {
     if (!settings.enableSocialSecurity) return 0;
     const rate = (settings.socialSecurityRate || 5) / 100;
     const max = settings.socialSecurityMax || 750;
-    return Math.min(max, Math.floor(currentSalary * rate));
-  }, [currentSalary, settings.enableSocialSecurity, settings.socialSecurityRate, settings.socialSecurityMax]);
+    const baseForSS = currentSalary + (settings.foodAllowance || 0);
+    return Math.min(max, Math.floor(baseForSS * rate));
+  }, [currentSalary, settings.foodAllowance, settings.enableSocialSecurity, settings.socialSecurityRate, settings.socialSecurityMax]);
 
   const calculatedPvdAmount = useMemo(() => {
     return (currentSalary * (settings.providentFundRate || 0)) / 100;
@@ -319,7 +299,7 @@ const App: React.FC = () => {
           <p className="text-center text-[9px] text-slate-400 font-bold mb-8 uppercase tracking-[0.15em]">{periodRange.label}</p>
           <div className="grid grid-cols-2 gap-4 mb-6">
             <div className="bg-slate-50/80 rounded-3xl p-5 border border-slate-50 flex flex-col items-center">
-              <span className="text-[10px] font-bold text-slate-400 uppercase mb-2">รายได้สะสม</span>
+              <span className="text-[10px] font-bold text-slate-400 uppercase mb-2">รายได้โอทีสะสม</span>
               <h2 className="text-xl font-bold text-slate-800">฿{monthlyStats.totalOT.toLocaleString()}</h2>
             </div>
             <div className="bg-blue-50/30 rounded-3xl p-5 border border-blue-50/50 flex flex-col items-center">
@@ -373,7 +353,12 @@ const App: React.FC = () => {
                     <h3 className="text-[11px] font-bold uppercase tracking-widest">รายการหัก</h3>
                 </div>
                 <div className="space-y-3 pl-6">
-                    {settings.enableSocialSecurity && <BreakdownRow label="ประกันสังคม" value={-calculatedSocialSecurity} isNegative />}
+                    {settings.enableSocialSecurity && (
+                      <div className="space-y-1">
+                        <BreakdownRow label="ประกันสังคม (รวมค่าอาหาร)" value={-calculatedSocialSecurity} isNegative />
+                        <p className="text-[9px] text-slate-400 italic">คำนวณจาก (เงินเดือน + ค่าอาหาร) x {settings.socialSecurityRate}%</p>
+                      </div>
+                    )}
                     {settings.providentFundRate > 0 && <BreakdownRow label="กองทุนสำรองเลี้ยงชีพ" value={-calculatedPvdAmount} isNegative />}
                     <div className="pt-3 border-t border-slate-50 flex justify-between items-center font-bold">
                         <span className="text-xs">รวมรายการหัก</span>
@@ -391,12 +376,25 @@ const App: React.FC = () => {
                 <div key={day} className="text-center text-[9px] font-bold text-slate-300 py-2 uppercase">{day}</div>
               ))}
               {Array.from({ length: periodRange.startDayOfWeek }).map((_, i) => <div key={`pad-${i}`} className="aspect-square"></div>)}
-              {calendarDays.map((item) => (
-                <button key={item.dateStr} onClick={() => handleDayClick(item)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center relative border transition-all ios-active ${item.isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-50 bg-slate-50/50'}`}>
-                  <span className={`text-[10px] font-bold ${item.isToday ? 'text-blue-600' : 'text-slate-400'}`}>{item.date.getDate()}</span>
-                  {item.records.length > 0 && <div className="w-1.5 h-1.5 bg-blue-500 rounded-full mt-1"></div>}
-                </button>
-              ))}
+              {calendarDays.map((item) => {
+                const dayOTTotal = item.records.reduce((sum, r) => sum + r.totalAmount, 0);
+                return (
+                  <button key={item.dateStr} onClick={() => handleDayClick(item)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center relative border transition-all ios-active ${item.isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-50 bg-slate-50/50'}`}>
+                    <span className={`text-[10px] font-bold ${item.isToday ? 'text-blue-600' : 'text-slate-400'}`}>{item.date.getDate()}</span>
+                    {item.records.length > 0 && (
+                      <div className="flex flex-col items-center mt-0.5">
+                        <span className="text-[7px] font-bold text-blue-600 bg-blue-100/40 px-1 rounded-sm leading-tight">
+                          ฿{dayOTTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </span>
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-6 flex items-center gap-2 justify-center">
+              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+              <span className="text-[10px] text-slate-400 font-bold uppercase">ตัวเลขในช่องคือยอดโอทีรวมรายวัน</span>
             </div>
           </div>
         ) : (
@@ -416,10 +414,16 @@ const App: React.FC = () => {
                   </div>
                   <div className="text-right flex items-center gap-1">
                      <span className="text-base font-bold text-slate-900">฿{record.totalAmount.toLocaleString()}</span>
-                     <button onClick={() => setRecordToDelete(record)} className="p-3 text-slate-200 hover:text-red-500 ios-active"><Trash2 className="w-5 h-5" /></button>
+                     <button onClick={(e) => { e.stopPropagation(); setRecordToDelete(record); }} className="p-3 text-slate-200 hover:text-red-500 ios-active"><Trash2 className="w-5 h-5" /></button>
                   </div>
                 </div>
              ))}
+             {filteredRecords.length === 0 && (
+                <div className="text-center py-20 opacity-30">
+                   <CalendarIcon className="w-12 h-12 mx-auto mb-4 text-slate-300" />
+                   <p className="font-bold text-slate-400 uppercase tracking-widest text-xs">ไม่มีรายการในรอบเดือนนี้</p>
+                </div>
+             )}
           </div>
         )}
       </main>
@@ -430,6 +434,37 @@ const App: React.FC = () => {
         </button>
       </nav>
 
+      {/* Selected Day Records Modal */}
+      {selectedDayInfo && (
+        <div className="fixed inset-0 z-[60] flex items-end justify-center">
+           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedDayInfo(null)}></div>
+           <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full duration-500 max-h-[80vh] overflow-y-auto">
+              <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-6"></div>
+              <div className="flex justify-between items-center mb-6">
+                 <h3 className="text-xl font-bold">รายการวันที่ {parseLocalDate(selectedDayInfo.dateStr).getDate()} {MONTHS_TH[parseLocalDate(selectedDayInfo.dateStr).getMonth()]}</h3>
+                 <button onClick={() => { setIsAdding(true); setFormData({...formData, date: selectedDayInfo.dateStr}); setSelectedDayInfo(null); }} className="p-2 bg-blue-50 text-blue-600 rounded-full"><Plus className="w-5 h-5" /></button>
+              </div>
+              <div className="space-y-3">
+                 {selectedDayInfo.records.map(record => (
+                    <div key={record.id} className="bg-slate-50 p-4 rounded-2xl flex justify-between items-center border border-slate-100">
+                       <div>
+                          <div className="flex items-center gap-2">
+                             <span className="font-bold text-slate-800">{record.hours} ชม.</span>
+                             <span className="text-[10px] bg-white px-2 py-0.5 rounded-full border border-slate-200">x{record.type}</span>
+                          </div>
+                          {record.note && <p className="text-[10px] text-slate-400 mt-0.5">{record.note}</p>}
+                       </div>
+                       <div className="flex items-center gap-3">
+                          <span className="font-bold">฿{record.totalAmount.toLocaleString()}</span>
+                          <button onClick={() => setRecordToDelete(record)} className="text-red-400 p-2"><Trash2 className="w-4 h-4" /></button>
+                       </div>
+                    </div>
+                 ))}
+              </div>
+           </div>
+        </div>
+      )}
+
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right duration-300">
            <header className="px-6 py-6 pt-[calc(1.5rem+env(safe-area-inset-top))] flex justify-between items-center bg-white border-b border-slate-100">
@@ -437,8 +472,6 @@ const App: React.FC = () => {
               <button onClick={() => setIsSettingsOpen(false)} className="text-blue-600 font-bold px-4 py-2 ios-active">เสร็จสิ้น</button>
            </header>
            <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-10">
-              
-              {/* Summary Block in Settings */}
               <div className="grid grid-cols-2 gap-4">
                   <div className="bg-green-50 rounded-3xl p-5 border border-green-100">
                       <div className="flex items-center gap-2 mb-2">
@@ -452,20 +485,20 @@ const App: React.FC = () => {
                           <MinusCircle className="w-3 h-3 text-red-600" />
                           <span className="text-[10px] font-bold text-red-600 uppercase">รวมรายการหัก</span>
                       </div>
-                      <span className="text-lg font-bold text-red-700">฿{calculatedSocialSecurity + calculatedPvdAmount > 0 ? (calculatedSocialSecurity + calculatedPvdAmount).toLocaleString() : '0'}</span>
+                      <span className="text-lg font-bold text-red-700">฿{(calculatedSocialSecurity + calculatedPvdAmount).toLocaleString()}</span>
                   </div>
               </div>
 
               <SettingSection title="ข้อมูลรายได้พื้นฐาน">
                   <SettingRow label="เงินเดือนหลัก (ปัจจุบัน)" value={settings.baseSalary} onChange={v => setSettings({...settings, baseSalary: parseFloat(v) || 0})} />
-                  <SettingRow label="ค่าอาหาร" value={settings.foodAllowance} onChange={v => setSettings({...settings, foodAllowance: parseFloat(v) || 0})} />
+                  <SettingRow label="ค่าอาหาร (คิดรวมประกันสังคม)" value={settings.foodAllowance} onChange={v => setSettings({...settings, foodAllowance: parseFloat(v) || 0})} />
                   <SettingRow label="เบี้ยขยัน" value={settings.diligenceAllowance} onChange={v => setSettings({...settings, diligenceAllowance: parseFloat(v) || 0})} />
               </SettingSection>
 
               <SettingSection title="ประวัติเงินเดือน (ย้อนหลัง)">
                   <div className="p-6 space-y-4">
                       <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight leading-relaxed">
-                        ระบุเงินเดือนเฉพาะเดือนที่แตกต่างจากเงินเดือนหลัก (เช่น เงินเดือนปีที่แล้ว) เดือนที่ไม่ได้ระบุจะใช้ "เงินเดือนหลัก" อัตโนมัติ
+                        ระบุเงินเดือนเฉพาะเดือนที่แตกต่างจากเงินเดือนหลัก เดือนที่ไม่ได้ระบุจะใช้ค่าเริ่มต้น
                       </p>
                       <div className="flex gap-2 items-center">
                           <input type="month" value={customSalaryMonth} onChange={e => setCustomSalaryMonth(e.target.value)} className="flex-1 bg-slate-50 border p-3 rounded-2xl text-sm font-bold text-black" />
@@ -496,7 +529,7 @@ const App: React.FC = () => {
 
               <SettingSection title="รายการหัก">
                   <div className="flex justify-between items-center px-6 py-5">
-                      <label className="text-sm font-bold text-slate-600">หักประกันสังคม</label>
+                      <label className="text-sm font-bold text-slate-600">หักประกันสังคม (ฐานเงินเดือน+ค่าอาหาร)</label>
                       <button 
                         onClick={() => setSettings({...settings, enableSocialSecurity: !settings.enableSocialSecurity})}
                         className={`w-12 h-6 rounded-full transition-colors relative ${settings.enableSocialSecurity ? 'bg-blue-600' : 'bg-slate-200'}`}
@@ -523,14 +556,27 @@ const App: React.FC = () => {
               <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-8"></div>
               <h3 className="text-2xl font-bold mb-6">บันทึกเวลาโอที</h3>
               <form onSubmit={handleAddRecord} className="space-y-6">
-                <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold text-black" />
-                <div className="grid grid-cols-2 gap-4">
-                  <input type="number" step="0.5" value={formData.hours} onChange={e => setFormData({...formData, hours: parseFloat(e.target.value)})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold text-black" placeholder="ชั่วโมง" />
-                  <select value={formData.type} onChange={e => setFormData({...formData, type: parseFloat(e.target.value) as OTType})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold text-black">
-                    {OT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                  </select>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">วันที่ทำงาน</label>
+                  <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold text-black" />
                 </div>
-                <button type="submit" className="w-full bg-blue-600 text-white p-5 rounded-2xl font-bold shadow-xl">บันทึกข้อมูล</button>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">จำนวนชั่วโมง</label>
+                    <input type="number" step="0.5" value={formData.hours} onChange={e => setFormData({...formData, hours: parseFloat(e.target.value)})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold text-black" placeholder="ชั่วโมง" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">เรทโอที</label>
+                    <select value={formData.type} onChange={e => setFormData({...formData, type: parseFloat(e.target.value) as OTType})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold text-black">
+                      {OT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">หมายเหตุ (ถ้ามี)</label>
+                  <input type="text" value={formData.note} onChange={e => setFormData({...formData, note: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border font-medium text-black" placeholder="เช่น ทำกะดึก, วันหยุดนักขัตฤกษ์" />
+                </div>
+                <button type="submit" className="w-full bg-blue-600 text-white p-5 rounded-2xl font-bold shadow-xl ios-active">บันทึกข้อมูล</button>
               </form>
           </div>
         </div>
@@ -539,10 +585,11 @@ const App: React.FC = () => {
       {recordToDelete && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
           <div className="bg-white w-full max-w-xs rounded-[2rem] overflow-hidden text-center p-8 space-y-6">
-              <h3 className="text-lg font-bold">ยืนยันการลบ?</h3>
+              <h3 className="text-lg font-bold">ยืนยันการลบรายการนี้?</h3>
+              <p className="text-xs text-slate-400">รายการนี้จะถูกลบออกจากบันทึกของคุณอย่างถาวร</p>
               <div className="grid grid-cols-2 gap-4">
-                <button onClick={() => setRecordToDelete(null)} className="py-3 bg-slate-100 rounded-xl font-medium">ยกเลิก</button>
-                <button onClick={confirmDelete} className="py-3 bg-red-500 text-white rounded-xl font-bold">ลบ</button>
+                <button onClick={() => setRecordToDelete(null)} className="py-3 bg-slate-100 rounded-xl font-medium ios-active text-slate-600">ยกเลิก</button>
+                <button onClick={confirmDelete} className="py-3 bg-red-500 text-white rounded-xl font-bold ios-active shadow-lg shadow-red-100">ลบรายการ</button>
               </div>
           </div>
         </div>
