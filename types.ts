@@ -13,20 +13,21 @@ export interface OTRecord {
 
 export interface UserSettings {
   baseSalary: number;
-  monthlySalaries?: Record<string, number>; // เก็บ { "2024-01": 25000, "2025-01": 28000 }
+  yearlySalaries: Record<string, number>;
   workingDaysPerMonth: number;
   workingHoursPerDay: number;
   foodAllowance: number;
   diligenceAllowance: number;
-  providentFundRate: number; // Percentage
-  // Social Security Settings
+  shiftAllowance: number; // เพิ่มค่ากะ
+  specialIncome: number;   // เพิ่มรายรับพิเศษ
+  providentFundRate: number; 
   enableSocialSecurity: boolean;
-  socialSecurityRate: number; // Default 5%
-  socialSecurityMax: number; // Default 750
+  socialSecurityRate: number; 
+  socialSecurityMax: number; 
 }
 
 export interface MonthlySummary {
-  month: string; // YYYY-MM
+  month: string; 
   totalHours: number;
   totalOTAmount: number;
   records: OTRecord[];

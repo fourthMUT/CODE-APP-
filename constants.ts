@@ -10,10 +10,13 @@ export const OT_TYPES: { value: OTType; label: string; color: string }[] = [
 
 export const DEFAULT_SETTINGS: UserSettings = {
   baseSalary: 20000,
+  yearlySalaries: {},
   workingDaysPerMonth: 30,
   workingHoursPerDay: 8,
   foodAllowance: 0,
   diligenceAllowance: 0,
+  shiftAllowance: 0,
+  specialIncome: 0,
   providentFundRate: 0,
   enableSocialSecurity: true,
   socialSecurityRate: 5,

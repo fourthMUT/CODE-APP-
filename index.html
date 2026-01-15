@@ -9,8 +9,6 @@
     <meta name="theme-color" content="#2563eb">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <!-- Google Identity Services -->
-    <script src="https://accounts.google.com/gsi/client" async></script>
     <style>
         :root { --ios-safe-top: env(safe-area-inset-top); --ios-safe-bottom: env(safe-area-inset-bottom); }
         body {
@@ -18,10 +16,28 @@
             background-color: #f8fafc;
             margin: 0; padding: 0;
             height: 100vh; overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
         }
         #root { height: 100vh; display: flex; flex-direction: column; }
-        input, select { font-size: 16px !important; }
+        
+        /* บังคับสีตัวหนังสือในช่องกรอกให้เป็นสีดำเข้มที่สุด */
+        input, select, textarea { 
+            font-size: 16px !important; 
+            color: #000000 !important; 
+            font-weight: 600 !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #000000 !important;
+            background-color: #f8fafc !important;
+        }
+        
+        input::placeholder {
+            color: #94a3b8 !important;
+            font-weight: 400 !important;
+            -webkit-text-fill-color: #94a3b8 !important;
+        }
+
         .ios-active:active { transform: scale(0.96); opacity: 0.8; transition: 0.1s; }
+        ::-webkit-scrollbar { display: none; }
     </style>
 <script type="importmap">
 {
