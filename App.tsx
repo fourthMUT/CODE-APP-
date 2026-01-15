@@ -21,7 +21,11 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   Share,
-  Download
+  Download,
+  PlusCircle,
+  CalendarDays,
+  Gift,
+  MinusCircle
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { OTRecord, UserSettings, OTType } from './types.ts';
@@ -50,7 +54,7 @@ const SettingSection = ({ title, children }: { title: string, children?: React.R
 const SettingRow = ({ label, value, onChange }: { label: string, value: number, onChange: (v: string) => void }) => (
   <div className="flex justify-between items-center px-6 py-5">
     <label className="text-sm font-bold text-slate-600">{label}</label>
-    <input type="number" value={value} onChange={e => onChange(e.target.value)} className="text-right font-bold w-28 bg-transparent outline-none" />
+    <input type="number" value={value} onChange={e => onChange(e.target.value)} className="text-right font-bold w-28 bg-transparent outline-none text-black" />
   </div>
 );
 
@@ -92,6 +96,10 @@ const App: React.FC = () => {
   const [recordToDelete, setRecordToDelete] = useState<OTRecord | null>(null);
   const [selectedDayInfo, setSelectedDayInfo] = useState<{ dateStr: string, records: OTRecord[] } | null>(null);
   const [showIOSInstall, setShowIOSInstall] = useState(false);
+
+  // State for adding custom monthly salary
+  const [customSalaryMonth, setCustomSalaryMonth] = useState(currentViewMonth);
+  const [customSalaryAmount, setCustomSalaryAmount] = useState(0);
 
   const [formData, setFormData] = useState({
     date: formatLocalISO(new Date()),
@@ -179,26 +187,6 @@ const App: React.FC = () => {
     return { totalOT, totalHours, totalAdditions, totalDeductions, pvdAmount: calculatedPvdAmount, grossSalary, netSalary };
   }, [filteredRecords, settings, currentSalary, calculatedSocialSecurity, calculatedPvdAmount]);
 
-  const chartData = useMemo(() => {
-    const dailyMap: Record<string, number> = {};
-    filteredRecords.forEach(r => {
-      dailyMap[r.date] = (dailyMap[r.date] || 0) + r.totalAmount;
-    });
-
-    const days = [];
-    let curr = parseLocalDate(periodRange.start);
-    const last = parseLocalDate(periodRange.end);
-    while (curr <= last) {
-      const dateStr = formatLocalISO(curr);
-      days.push({
-        date: `${curr.getDate()}`,
-        amount: dailyMap[dateStr] || 0
-      });
-      curr.setDate(curr.getDate() + 1);
-    }
-    return days;
-  }, [filteredRecords, periodRange]);
-
   const handleAddRecord = (e: React.FormEvent) => {
     e.preventDefault();
     const salaryAtDate = getSalaryForDate(formData.date);
@@ -270,14 +258,24 @@ const App: React.FC = () => {
     }
   };
 
-  const updateSalaryForKey = (key: string, val: string) => {
-    const amount = parseFloat(val) || 0;
+  const addCustomSalary = () => {
+    if (customSalaryAmount <= 0) return;
     setSettings({
       ...settings,
       monthlySalaries: {
         ...(settings.monthlySalaries || {}),
-        [key]: amount
+        [customSalaryMonth]: customSalaryAmount
       }
+    });
+    setCustomSalaryAmount(0);
+  };
+
+  const removeCustomSalary = (key: string) => {
+    const newSalaries = { ...(settings.monthlySalaries || {}) };
+    delete newSalaries[key];
+    setSettings({
+      ...settings,
+      monthlySalaries: newSalaries
     });
   };
 
@@ -362,6 +360,7 @@ const App: React.FC = () => {
                     <BreakdownRow label="เงินเดือน" value={currentSalary} />
                     <BreakdownRow label="ค่าล่วงเวลา (OT)" value={monthlyStats.totalOT} isHighlight />
                     {settings.foodAllowance > 0 && <BreakdownRow label="ค่าอาหาร" value={settings.foodAllowance} />}
+                    {settings.diligenceAllowance > 0 && <BreakdownRow label="เบี้ยขยัน" value={settings.diligenceAllowance} />}
                     <div className="pt-3 border-t border-slate-50 flex justify-between items-center font-bold">
                         <span className="text-xs">รวมรายได้</span>
                         <span className="text-sm text-green-600">฿{monthlyStats.grossSalary.toLocaleString()}</span>
@@ -375,6 +374,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="space-y-3 pl-6">
                     {settings.enableSocialSecurity && <BreakdownRow label="ประกันสังคม" value={-calculatedSocialSecurity} isNegative />}
+                    {settings.providentFundRate > 0 && <BreakdownRow label="กองทุนสำรองเลี้ยงชีพ" value={-calculatedPvdAmount} isNegative />}
                     <div className="pt-3 border-t border-slate-50 flex justify-between items-center font-bold">
                         <span className="text-xs">รวมรายการหัก</span>
                         <span className="text-sm text-red-500">- ฿{monthlyStats.totalDeductions.toLocaleString()}</span>
@@ -436,14 +436,81 @@ const App: React.FC = () => {
               <h3 className="text-2xl font-bold text-slate-900">การตั้งค่า</h3>
               <button onClick={() => setIsSettingsOpen(false)} className="text-blue-600 font-bold px-4 py-2 ios-active">เสร็จสิ้น</button>
            </header>
-           <div className="flex-1 overflow-y-auto p-6 space-y-8">
-              <SettingSection title="ข้อมูลรายได้">
-                  <SettingRow label="เงินเดือนหลัก" value={settings.baseSalary} onChange={v => setSettings({...settings, baseSalary: parseFloat(v) || 0})} />
+           <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-10">
+              
+              {/* Summary Block in Settings */}
+              <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-green-50 rounded-3xl p-5 border border-green-100">
+                      <div className="flex items-center gap-2 mb-2">
+                          <Gift className="w-3 h-3 text-green-600" />
+                          <span className="text-[10px] font-bold text-green-600 uppercase">รวมสวัสดิการ</span>
+                      </div>
+                      <span className="text-lg font-bold text-green-700">฿{(settings.foodAllowance + settings.diligenceAllowance).toLocaleString()}</span>
+                  </div>
+                  <div className="bg-red-50 rounded-3xl p-5 border border-red-100">
+                      <div className="flex items-center gap-2 mb-2">
+                          <MinusCircle className="w-3 h-3 text-red-600" />
+                          <span className="text-[10px] font-bold text-red-600 uppercase">รวมรายการหัก</span>
+                      </div>
+                      <span className="text-lg font-bold text-red-700">฿{calculatedSocialSecurity + calculatedPvdAmount > 0 ? (calculatedSocialSecurity + calculatedPvdAmount).toLocaleString() : '0'}</span>
+                  </div>
+              </div>
+
+              <SettingSection title="ข้อมูลรายได้พื้นฐาน">
+                  <SettingRow label="เงินเดือนหลัก (ปัจจุบัน)" value={settings.baseSalary} onChange={v => setSettings({...settings, baseSalary: parseFloat(v) || 0})} />
                   <SettingRow label="ค่าอาหาร" value={settings.foodAllowance} onChange={v => setSettings({...settings, foodAllowance: parseFloat(v) || 0})} />
+                  <SettingRow label="เบี้ยขยัน" value={settings.diligenceAllowance} onChange={v => setSettings({...settings, diligenceAllowance: parseFloat(v) || 0})} />
               </SettingSection>
-              <SettingSection title="การคำนวณ">
+
+              <SettingSection title="ประวัติเงินเดือน (ย้อนหลัง)">
+                  <div className="p-6 space-y-4">
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight leading-relaxed">
+                        ระบุเงินเดือนเฉพาะเดือนที่แตกต่างจากเงินเดือนหลัก (เช่น เงินเดือนปีที่แล้ว) เดือนที่ไม่ได้ระบุจะใช้ "เงินเดือนหลัก" อัตโนมัติ
+                      </p>
+                      <div className="flex gap-2 items-center">
+                          <input type="month" value={customSalaryMonth} onChange={e => setCustomSalaryMonth(e.target.value)} className="flex-1 bg-slate-50 border p-3 rounded-2xl text-sm font-bold text-black" />
+                          <input type="number" value={customSalaryAmount} onChange={e => setCustomSalaryAmount(parseFloat(e.target.value) || 0)} placeholder="จำนวนเงิน" className="w-28 bg-slate-50 border p-3 rounded-2xl text-sm font-bold text-right text-black" />
+                          <button onClick={addCustomSalary} className="p-3 bg-blue-600 text-white rounded-2xl shadow-lg ios-active"><PlusCircle className="w-5 h-5" /></button>
+                      </div>
+                      <div className="pt-4 space-y-2">
+                          {Object.entries(settings.monthlySalaries || {}).sort((a,b) => b[0].localeCompare(a[0])).map(([key, amount]) => (
+                            <div key={key} className="flex justify-between items-center p-3 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
+                                <div className="flex items-center gap-2">
+                                    <CalendarDays className="w-4 h-4 text-slate-400" />
+                                    <span className="text-sm font-bold text-slate-600">{key.split('-')[0]} / {MONTHS_TH[parseInt(key.split('-')[1])-1]}</span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <span className="text-sm font-bold text-slate-900">฿{amount.toLocaleString()}</span>
+                                    <button onClick={() => removeCustomSalary(key)} className="text-red-400 ios-active"><XCircle className="w-4 h-4" /></button>
+                                </div>
+                            </div>
+                          ))}
+                      </div>
+                  </div>
+              </SettingSection>
+
+              <SettingSection title="การคำนวณพื้นฐาน">
                   <SettingRow label="วันทำงาน/เดือน" value={settings.workingDaysPerMonth} onChange={v => setSettings({...settings, workingDaysPerMonth: parseInt(v) || 0})} />
                   <SettingRow label="ชั่วโมงทำงาน/วัน" value={settings.workingHoursPerDay} onChange={v => setSettings({...settings, workingHoursPerDay: parseInt(v) || 0})} />
+              </SettingSection>
+
+              <SettingSection title="รายการหัก">
+                  <div className="flex justify-between items-center px-6 py-5">
+                      <label className="text-sm font-bold text-slate-600">หักประกันสังคม</label>
+                      <button 
+                        onClick={() => setSettings({...settings, enableSocialSecurity: !settings.enableSocialSecurity})}
+                        className={`w-12 h-6 rounded-full transition-colors relative ${settings.enableSocialSecurity ? 'bg-blue-600' : 'bg-slate-200'}`}
+                      >
+                        <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${settings.enableSocialSecurity ? 'left-7' : 'left-1'}`}></div>
+                      </button>
+                  </div>
+                  {settings.enableSocialSecurity && (
+                    <>
+                      <SettingRow label="อัตราหัก (%)" value={settings.socialSecurityRate} onChange={v => setSettings({...settings, socialSecurityRate: parseFloat(v) || 0})} />
+                      <SettingRow label="สูงสุดไม่เกิน (บาท)" value={settings.socialSecurityMax} onChange={v => setSettings({...settings, socialSecurityMax: parseFloat(v) || 0})} />
+                    </>
+                  )}
+                  <SettingRow label="หักกองทุนสำรองฯ (%)" value={settings.providentFundRate} onChange={v => setSettings({...settings, providentFundRate: parseFloat(v) || 0})} />
               </SettingSection>
            </div>
         </div>
@@ -456,10 +523,10 @@ const App: React.FC = () => {
               <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-8"></div>
               <h3 className="text-2xl font-bold mb-6">บันทึกเวลาโอที</h3>
               <form onSubmit={handleAddRecord} className="space-y-6">
-                <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold" />
+                <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold text-black" />
                 <div className="grid grid-cols-2 gap-4">
-                  <input type="number" step="0.5" value={formData.hours} onChange={e => setFormData({...formData, hours: parseFloat(e.target.value)})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold" placeholder="ชั่วโมง" />
-                  <select value={formData.type} onChange={e => setFormData({...formData, type: parseFloat(e.target.value) as OTType})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold">
+                  <input type="number" step="0.5" value={formData.hours} onChange={e => setFormData({...formData, hours: parseFloat(e.target.value)})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold text-black" placeholder="ชั่วโมง" />
+                  <select value={formData.type} onChange={e => setFormData({...formData, type: parseFloat(e.target.value) as OTType})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold text-black">
                     {OT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
                 </div>

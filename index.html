@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>OT BFC - บันทึกโอที</title>
-    <link rel="manifest" href="manifest.json">
+    <link rel="manifest" href="/manifest.json">
     
     <!-- Mobile App Specific Tags -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -34,16 +34,24 @@
             padding: 0;
             height: 100vh;
             overflow: hidden;
+            overflow-y: hidden; 
         }
         #root {
             height: 100vh;
             display: flex;
             flex-direction: column;
         }
+        /* ปรับสีตัวหนังสือที่กรอกให้เป็นสีดำชัดเจน */
         input, textarea, select {
             -webkit-user-select: text;
             user-select: text;
             font-size: 16px !important;
+            color: #000000 !important;
+        }
+        /* ปรับสีตัวอักษรของ Placeholder (ข้อความแนะนำ) ให้ยังเป็นสีเทาอยู่เพื่อความสวยงาม */
+        ::placeholder {
+            color: #94a3b8 !important;
+            opacity: 1;
         }
         ::-webkit-scrollbar {
             display: none;
@@ -56,31 +64,28 @@
             transform: scale(0.97);
             transition: all 0.1s ease;
         }
-        @keyframes slideUp {
-          from { transform: translateY(100%); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
     </style>
 <script type="importmap">
 {
   "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "recharts": "https://esm.sh/recharts@^3.6.0",
-    "react": "https://esm.sh/react@^19.2.3",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "lucide-react": "https://esm.sh/lucide-react@^0.562.0"
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "vite": "https://esm.sh/vite@^7.3.1"
   }
 }
 </script>
 </head>
 <body>
     <div id="root"></div>
-    <!-- ต้องโหลด index.tsx ที่นี่ -->
-    <script type="module" src="index.tsx"></script>
+    <script type="module" src="/index.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('./sw.js')
+          navigator.serviceWorker.register('/sw.js')
             .then(reg => console.log('Service Worker Registered'))
             .catch(err => console.log('SW Registration error:', err));
         });
