@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="th">
 <head>
@@ -6,13 +7,15 @@
     <title>OT BFC - บันทึกโอที</title>
     <link rel="manifest" href="manifest.json">
     
-    <!-- iOS Specific Tags -->
+    <!-- Mobile App Specific Tags -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="OT BFC">
+    <meta name="mobile-web-app-capable" content="yes">
+    
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3135/3135706.png">
     
-    <meta name="theme-color" content="#ffffff">
+    <meta name="theme-color" content="#2563eb">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
@@ -21,27 +24,42 @@
             --ios-safe-bottom: env(safe-area-inset-bottom);
         }
         body {
-            font-family: 'Kanit', sans-serif;
+            font-family: 'Kanit', -apple-system, sans-serif;
             background-color: #f8fafc;
             -webkit-user-select: none;
             user-select: none;
             -webkit-tap-highlight-color: transparent;
-            overscroll-behavior-y: none;
+            overscroll-behavior: none;
             margin: 0;
             padding: 0;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #root {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
         input, textarea, select {
             -webkit-user-select: text;
             user-select: text;
-            font-size: 16px !important; /* Prevent iOS zoom on focus */
+            font-size: 16px !important; /* ป้องกัน iOS ซูมเข้าตอนจิ้ม Input */
         }
         ::-webkit-scrollbar {
             display: none;
+        }
+        .scrolling-touch {
+            -webkit-overflow-scrolling: touch;
         }
         .ios-active:active {
             opacity: 0.6;
             transform: scale(0.97);
             transition: all 0.1s ease;
+        }
+        /* แอนิเมชันสำหรับ iOS Prompt */
+        @keyframes slideUp {
+          from { transform: translateY(100%); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
         }
     </style>
 <script type="importmap">
@@ -66,6 +84,12 @@
             .catch(err => console.log('SW Registration error:', err));
         });
       }
+      
+      // ป้องกัน Scroll เด้งในส่วน Header และ Footer บน iOS
+      document.addEventListener('touchmove', function (e) {
+        if (e.target.closest('main') || e.target.closest('.overflow-y-auto')) return;
+        e.preventDefault();
+      }, { passive: false });
     </script>
 </body>
 </html>

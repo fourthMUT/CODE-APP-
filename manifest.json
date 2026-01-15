@@ -1,18 +1,28 @@
+
 {
   "name": "OT BFC Tracker",
   "short_name": "OT BFC",
   "description": "จัดการชั่วโมงทำงานและสรุปรายได้โอทีของคุณ",
   "start_url": "./index.html",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
   "background_color": "#ffffff",
   "theme_color": "#2563eb",
   "orientation": "portrait",
+  "id": "com.otbfc.tracker.app",
+  "categories": ["finance", "productivity"],
   "icons": [
     {
       "src": "https://cdn-icons-png.flaticon.com/512/3135/3135706.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3135/3135706.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
