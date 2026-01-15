@@ -41,14 +41,12 @@
             display: flex;
             flex-direction: column;
         }
-        /* ปรับสีตัวหนังสือที่กรอกให้เป็นสีดำชัดเจน */
         input, textarea, select {
             -webkit-user-select: text;
             user-select: text;
             font-size: 16px !important;
             color: #000000 !important;
         }
-        /* ปรับสีตัวอักษรของ Placeholder (ข้อความแนะนำ) ให้ยังเป็นสีเทาอยู่เพื่อความสวยงาม */
         ::placeholder {
             color: #94a3b8 !important;
             opacity: 1;
@@ -68,19 +66,20 @@
 <script type="importmap">
 {
   "imports": {
-    "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "recharts": "https://esm.sh/recharts@^3.6.0",
+    "react/": "https://esm.sh/react@^19.2.3/",
     "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
-    "vite": "https://esm.sh/vite@^7.3.1"
+    "recharts": "https://esm.sh/recharts@^3.6.0",
+    "vite": "https://esm.sh/vite@^7.3.1",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
   }
 }
 </script>
 </head>
 <body>
     <div id="root"></div>
+    <!-- ใช้ path สัมพัทธ์เพื่อให้ Vite จัดการตอน Build -->
     <script type="module" src="/index.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
