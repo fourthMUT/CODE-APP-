@@ -3,7 +3,7 @@
   "name": "OT BFC Tracker",
   "short_name": "OT BFC",
   "description": "จัดการชั่วโมงทำงานและสรุปรายได้โอทีของคุณ",
-  "start_url": "./index.html",
+  "start_url": "/",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone"],
   "background_color": "#f8fafc",
