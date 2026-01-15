@@ -1,0 +1,18 @@
+{
+  "name": "OT BFC Tracker",
+  "short_name": "OT BFC",
+  "description": "จัดการชั่วโมงทำงานและสรุปรายได้โอทีของคุณ",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#2563eb",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3135/3135706.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
