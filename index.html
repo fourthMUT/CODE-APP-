@@ -43,7 +43,7 @@
         input, textarea, select {
             -webkit-user-select: text;
             user-select: text;
-            font-size: 16px !important; /* ป้องกัน iOS ซูมเข้าตอนจิ้ม Input */
+            font-size: 16px !important;
         }
         ::-webkit-scrollbar {
             display: none;
@@ -56,7 +56,6 @@
             transform: scale(0.97);
             transition: all 0.1s ease;
         }
-        /* แอนิเมชันสำหรับ iOS Prompt */
         @keyframes slideUp {
           from { transform: translateY(100%); opacity: 0; }
           to { transform: translateY(0); opacity: 1; }
@@ -76,6 +75,8 @@
 </head>
 <body>
     <div id="root"></div>
+    <!-- ต้องโหลด index.tsx ที่นี่ -->
+    <script type="module" src="index.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
@@ -85,7 +86,6 @@
         });
       }
       
-      // ป้องกัน Scroll เด้งในส่วน Header และ Footer บน iOS
       document.addEventListener('touchmove', function (e) {
         if (e.target.closest('main') || e.target.closest('.overflow-y-auto')) return;
         e.preventDefault();
