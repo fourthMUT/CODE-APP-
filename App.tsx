@@ -18,10 +18,23 @@ import {
   PlusCircle,
   CalendarDays,
   Gift,
-  MinusCircle
+  MinusCircle,
+  LogOut,
+  User,
+  ShieldCheck
 } from 'lucide-react';
 import { OTRecord, UserSettings, OTType } from './types.ts';
 import { OT_TYPES, DEFAULT_SETTINGS, MONTHS_TH } from './constants.ts';
+
+// Helper for Google JWT Decoding
+function parseJwt(token: string) {
+  const base64Url = token.split('.')[1];
+  const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+  const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+  }).join(''));
+  return JSON.parse(jsonPayload);
+}
 
 const formatLocalISO = (date: Date) => {
   const y = date.getFullYear();
@@ -57,20 +70,15 @@ const BreakdownRow = ({ label, value, isHighlight, isNegative }: { label: string
 );
 
 const App: React.FC = () => {
-  const [records, setRecords] = useState<OTRecord[]>(() => {
-    const saved = localStorage.getItem('ot_records');
-    return saved ? JSON.parse(saved) : [];
+  // Auth State
+  const [user, setUser] = useState<{ email: string; name: string; picture: string } | null>(() => {
+    const saved = localStorage.getItem('ot_bfc_user');
+    return saved ? JSON.parse(saved) : null;
   });
-  
-  const [settings, setSettings] = useState<UserSettings>(() => {
-    const saved = localStorage.getItem('user_settings');
-    const parsed = saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      monthlySalaries: parsed.monthlySalaries || {}
-    };
-  });
+
+  // Data States (Loaded based on user email)
+  const [records, setRecords] = useState<OTRecord[]>([]);
+  const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
 
   const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
   const [currentViewMonth, setCurrentViewMonth] = useState(() => {
@@ -97,23 +105,78 @@ const App: React.FC = () => {
     note: ''
   });
 
+  // Load user data whenever user changes
+  useEffect(() => {
+    if (user) {
+      const email = user.email;
+      const savedRecords = localStorage.getItem(`ot_records_${email}`);
+      const savedSettings = localStorage.getItem(`user_settings_${email}`);
+      
+      setRecords(savedRecords ? JSON.parse(savedRecords) : []);
+      
+      const parsedSettings = savedSettings ? JSON.parse(savedSettings) : DEFAULT_SETTINGS;
+      setSettings({
+        ...DEFAULT_SETTINGS,
+        ...parsedSettings,
+        monthlySalaries: parsedSettings.monthlySalaries || {}
+      });
+    }
+  }, [user]);
+
+  // Save data whenever it changes
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem(`ot_records_${user.email}`, JSON.stringify(records));
+    }
+  }, [records, user]);
+
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem(`user_settings_${user.email}`, JSON.stringify(settings));
+    }
+  }, [settings, user]);
+
+  // Google Login Setup
+  useEffect(() => {
+    /* global google */
+    const handleCredentialResponse = (response: any) => {
+      const decoded = parseJwt(response.credential);
+      const userData = {
+        email: decoded.email,
+        name: decoded.name,
+        picture: decoded.picture
+      };
+      setUser(userData);
+      localStorage.setItem('ot_bfc_user', JSON.stringify(userData));
+    };
+
+    if (typeof window !== 'undefined' && !user) {
+        const interval = setInterval(() => {
+            if ((window as any).google) {
+                (window as any).google.accounts.id.initialize({
+                    client_id: "YOUR_GOOGLE_CLIENT_ID_PLACEHOLDER.apps.googleusercontent.com", // ในระบบจริงต้องใส่ Client ID
+                    callback: handleCredentialResponse,
+                });
+                (window as any).google.accounts.id.renderButton(
+                    document.getElementById("googleBtn"),
+                    { theme: "outline", size: "large", width: 280, shape: "pill", text: "signin_with" }
+                );
+                clearInterval(interval);
+            }
+        }, 500);
+        return () => clearInterval(interval);
+    }
+  }, [user]);
+
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem('ot_records', JSON.stringify(records));
-  }, [records]);
-
-  useEffect(() => {
-    localStorage.setItem('user_settings', JSON.stringify(settings));
-  }, [settings]);
-
-  const getSalaryForDate = (dateStr: string) => {
-    const [y, m] = dateStr.split('-');
-    const key = `${y}-${m}`;
-    return settings.monthlySalaries?.[key] || settings.baseSalary;
+  const logout = () => {
+    setUser(null);
+    localStorage.removeItem('ot_bfc_user');
+    window.location.reload();
   };
 
   const currentSalary = useMemo(() => {
@@ -137,7 +200,6 @@ const App: React.FC = () => {
     };
   }, [currentViewMonth]);
 
-  // UPDATE: Include food allowance in social security calculation base as requested
   const calculatedSocialSecurity = useMemo(() => {
     if (!settings.enableSocialSecurity) return 0;
     const rate = (settings.socialSecurityRate || 5) / 100;
@@ -164,12 +226,12 @@ const App: React.FC = () => {
     const grossSalary = currentSalary + totalOT + totalAdditions;
     const netSalary = grossSalary - totalDeductions;
 
-    return { totalOT, totalHours, totalAdditions, totalDeductions, pvdAmount: calculatedPvdAmount, grossSalary, netSalary };
+    return { totalOT, totalHours, totalAdditions, totalDeductions, grossSalary, netSalary };
   }, [filteredRecords, settings, currentSalary, calculatedSocialSecurity, calculatedPvdAmount]);
 
   const handleAddRecord = (e: React.FormEvent) => {
     e.preventDefault();
-    const salaryAtDate = getSalaryForDate(formData.date);
+    const salaryAtDate = settings.monthlySalaries?.[formData.date.substring(0, 7)] || settings.baseSalary;
     const hRate = salaryAtDate / (settings.workingDaysPerMonth * settings.workingHoursPerDay);
     const amount = formData.hours * hRate * formData.type;
     const id = Date.now().toString() + Math.random().toString(36).substring(2, 9);
@@ -187,26 +249,6 @@ const App: React.FC = () => {
     setRecords(prev => [newRecord, ...prev]);
     setIsAdding(false);
     setFormData({ ...formData, note: '' });
-    setSelectedDayInfo(null);
-  };
-
-  const confirmDelete = () => {
-    if (recordToDelete) {
-      setRecords(prev => prev.filter(r => r.id !== recordToDelete.id));
-      if (selectedDayInfo) {
-        setSelectedDayInfo(prev => prev ? {
-            ...prev,
-            records: prev.records.filter(r => r.id !== recordToDelete.id)
-        } : null);
-      }
-      setRecordToDelete(null);
-    }
-  };
-
-  const changeMonth = (offset: number) => {
-    const [year, month] = currentViewMonth.split('-').map(Number);
-    const date = new Date(year, month - 1 + offset, 1);
-    setCurrentViewMonth(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`);
   };
 
   const calendarDays = useMemo(() => {
@@ -229,6 +271,12 @@ const App: React.FC = () => {
     return days;
   }, [periodRange, filteredRecords]);
 
+  const changeMonth = (offset: number) => {
+    const [year, month] = currentViewMonth.split('-').map(Number);
+    const date = new Date(year, month - 1 + offset, 1);
+    setCurrentViewMonth(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`);
+  };
+
   const handleDayClick = (day: { dateStr: string, records: OTRecord[] }) => {
     if (day.records.length > 0) {
       setSelectedDayInfo(day);
@@ -238,60 +286,59 @@ const App: React.FC = () => {
     }
   };
 
-  const addCustomSalary = () => {
-    if (customSalaryAmount <= 0) return;
-    setSettings({
-      ...settings,
-      monthlySalaries: {
-        ...(settings.monthlySalaries || {}),
-        [customSalaryMonth]: customSalaryAmount
-      }
-    });
-    setCustomSalaryAmount(0);
-  };
-
-  const removeCustomSalary = (key: string) => {
-    const newSalaries = { ...(settings.monthlySalaries || {}) };
-    delete newSalaries[key];
-    setSettings({
-      ...settings,
-      monthlySalaries: newSalaries
-    });
-  };
-
-  const thaiDate = now.toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  const thaiTime = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  // Login Screen
+  if (!user) {
+    return (
+      <div className="min-h-screen max-w-lg mx-auto bg-white flex flex-col items-center justify-center p-10 relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-1/2 bg-blue-600 rounded-b-[4rem] -z-10 shadow-2xl"></div>
+        <div className="bg-white/90 backdrop-blur-xl p-10 rounded-[3rem] shadow-2xl border border-white/20 flex flex-col items-center w-full max-w-sm">
+          <div className="w-20 h-20 bg-blue-500 rounded-3xl flex items-center justify-center mb-8 shadow-xl">
+             <Clock className="w-10 h-10 text-white" />
+          </div>
+          <h1 className="text-3xl font-bold text-slate-900 mb-2">OT BFC</h1>
+          <p className="text-slate-400 text-sm text-center mb-10 leading-relaxed">บันทึกชั่วโมงโอทีและรายได้ของคุณ<br/>ให้เป็นเรื่องง่ายและแม่นยำ</p>
+          <div id="googleBtn" className="mb-6"></div>
+          <p className="text-[10px] text-slate-300 uppercase font-bold tracking-widest text-center leading-loose">
+            ลงชื่อเข้าใช้ด้วย Gmail เพื่อบันทึกข้อมูล<br/>และเข้าถึงได้จากทุกที่
+          </p>
+        </div>
+        <div className="mt-10 flex flex-col items-center gap-2 opacity-30">
+           <ShieldCheck className="w-5 h-5 text-slate-400" />
+           <span className="text-[10px] font-bold uppercase tracking-widest">Secure Data Storage</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen max-w-lg mx-auto bg-slate-50 relative flex flex-col">
       <header className="sticky top-0 z-30 pt-[env(safe-area-inset-top)] bg-white/80 backdrop-blur-xl border-b border-slate-200/50 shadow-sm">
         <div className="px-6 py-4 flex justify-between items-start">
           <div className="flex-1">
-            <span className="text-[10px] font-bold text-blue-600 uppercase tracking-[0.2em]">OT BFC TRACKER</span>
+            <span className="text-[10px] font-bold text-blue-600 uppercase tracking-[0.2em]">ยินดีต้อนรับคุณ {user.name.split(' ')[0]}</span>
             <h1 className="text-2xl font-bold text-slate-900 leading-tight">บันทึกเวลา</h1>
             <div className="mt-1 flex items-center gap-1.5 text-slate-500">
               <Clock className="w-3 h-3 text-blue-400" />
-              <span className="text-[11px] font-medium">{thaiDate} • {thaiTime} น.</span>
+              <span className="text-[11px] font-medium">{now.toLocaleTimeString('th-TH')} น.</span>
             </div>
           </div>
-          <div className="flex gap-2 mt-1">
-             <button onClick={() => setViewMode(viewMode === 'list' ? 'calendar' : 'list')} className="p-2.5 bg-slate-100/80 rounded-full ios-active">
+          <div className="flex gap-2">
+             <button onClick={() => setViewMode(viewMode === 'list' ? 'calendar' : 'list')} className="p-2.5 bg-slate-100 rounded-full ios-active">
                 {viewMode === 'list' ? <LayoutGrid className="w-5 h-5 text-slate-600" /> : <ListIcon className="w-5 h-5 text-slate-600" />}
              </button>
-             <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 bg-slate-100/80 rounded-full ios-active">
-                <SettingsIcon className="w-5 h-5 text-slate-600" />
+             <button onClick={() => setIsSettingsOpen(true)} className="p-0.5 border-2 border-white rounded-full shadow-sm ios-active overflow-hidden">
+                <img src={user.picture} alt="profile" className="w-9 h-9 object-cover" />
              </button>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 px-4 py-6 space-y-6 pb-32 overflow-y-auto scrolling-touch">
+      <main className="flex-1 px-4 py-6 space-y-6 pb-32 overflow-y-auto">
         <div className="bg-white rounded-[2.5rem] p-7 shadow-sm border border-slate-100 overflow-hidden relative">
           <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50/50 rounded-full -mr-16 -mt-16 blur-3xl"></div>
           <div className="flex items-center justify-between mb-4 relative">
             <button onClick={() => changeMonth(-1)} className="p-2 bg-slate-50 rounded-full ios-active border border-slate-100"><ChevronLeft className="w-4 h-4 text-slate-500" /></button>
             <div className="text-center">
-                <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest block mb-0.5">รอบเดือน</span>
                 <span className="font-bold text-slate-900 text-lg">{MONTHS_TH[parseInt(currentViewMonth.split('-')[1]) - 1]} {parseInt(currentViewMonth.split('-')[0]) + 543}</span>
             </div>
             <button onClick={() => changeMonth(1)} className="p-2 bg-slate-50 rounded-full ios-active border border-slate-100"><ChevronRight className="w-4 h-4 text-slate-500" /></button>
@@ -323,28 +370,17 @@ const App: React.FC = () => {
         </div>
 
         {showBreakdown && (
-          <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 space-y-8 animate-in slide-in-from-top-4 fade-in duration-500 relative">
-             <div className="bg-slate-50/50 rounded-2xl p-4 flex justify-between items-center border border-dashed border-slate-200">
-                <div className="flex items-center gap-2">
-                    <Clock className="w-3.5 h-3.5 text-slate-400" />
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">อัตราจ้างต่อชั่วโมง</span>
-                </div>
-                <span className="text-sm font-bold text-slate-600">฿{hourlyRate.toFixed(2)} / ชม.</span>
-             </div>
+          <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 space-y-8 animate-in slide-in-from-top-4 duration-500 relative">
              <div className="space-y-4">
                 <div className="flex items-center gap-2 text-green-600">
                     <ArrowUpCircle className="w-4 h-4" />
-                    <h3 className="text-[11px] font-bold uppercase tracking-widest">รายได้ทั้งหมด</h3>
+                    <h3 className="text-[11px] font-bold uppercase tracking-widest">รายรับทั้งหมด</h3>
                 </div>
                 <div className="space-y-3 pl-6">
                     <BreakdownRow label="เงินเดือน" value={currentSalary} />
-                    <BreakdownRow label="ค่าล่วงเวลา (OT)" value={monthlyStats.totalOT} isHighlight />
-                    {settings.foodAllowance > 0 && <BreakdownRow label="ค่าอาหาร" value={settings.foodAllowance} />}
-                    {settings.diligenceAllowance > 0 && <BreakdownRow label="เบี้ยขยัน" value={settings.diligenceAllowance} />}
-                    <div className="pt-3 border-t border-slate-50 flex justify-between items-center font-bold">
-                        <span className="text-xs">รวมรายได้</span>
-                        <span className="text-sm text-green-600">฿{monthlyStats.grossSalary.toLocaleString()}</span>
-                    </div>
+                    <BreakdownRow label="ค่าโอทีรวม" value={monthlyStats.totalOT} isHighlight />
+                    <BreakdownRow label="ค่าอาหาร" value={settings.foodAllowance} />
+                    <BreakdownRow label="เบี้ยขยัน" value={settings.diligenceAllowance} />
                 </div>
              </div>
              <div className="space-y-4 pt-2">
@@ -353,17 +389,11 @@ const App: React.FC = () => {
                     <h3 className="text-[11px] font-bold uppercase tracking-widest">รายการหัก</h3>
                 </div>
                 <div className="space-y-3 pl-6">
-                    {settings.enableSocialSecurity && (
-                      <div className="space-y-1">
-                        <BreakdownRow label="ประกันสังคม (รวมค่าอาหาร)" value={-calculatedSocialSecurity} isNegative />
+                    <div className="space-y-1">
+                        <BreakdownRow label="ประกันสังคม" value={-calculatedSocialSecurity} isNegative />
                         <p className="text-[9px] text-slate-400 italic">คำนวณจาก (เงินเดือน + ค่าอาหาร) x {settings.socialSecurityRate}%</p>
-                      </div>
-                    )}
-                    {settings.providentFundRate > 0 && <BreakdownRow label="กองทุนสำรองเลี้ยงชีพ" value={-calculatedPvdAmount} isNegative />}
-                    <div className="pt-3 border-t border-slate-50 flex justify-between items-center font-bold">
-                        <span className="text-xs">รวมรายการหัก</span>
-                        <span className="text-sm text-red-500">- ฿{monthlyStats.totalDeductions.toLocaleString()}</span>
                     </div>
+                    <BreakdownRow label="กองทุนสำรองฯ" value={-calculatedPvdAmount} isNegative />
                 </div>
              </div>
           </div>
@@ -371,7 +401,7 @@ const App: React.FC = () => {
 
         {viewMode === 'calendar' ? (
           <div className="bg-white rounded-[2.5rem] p-6 shadow-sm border border-slate-100">
-            <div className="grid grid-cols-7 gap-2">
+            <div className="grid grid-cols-7 gap-1.5">
               {['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map(day => (
                 <div key={day} className="text-center text-[9px] font-bold text-slate-300 py-2 uppercase">{day}</div>
               ))}
@@ -381,180 +411,104 @@ const App: React.FC = () => {
                 return (
                   <button key={item.dateStr} onClick={() => handleDayClick(item)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center relative border transition-all ios-active ${item.isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-50 bg-slate-50/50'}`}>
                     <span className={`text-[10px] font-bold ${item.isToday ? 'text-blue-600' : 'text-slate-400'}`}>{item.date.getDate()}</span>
-                    {item.records.length > 0 && (
-                      <div className="flex flex-col items-center mt-0.5">
-                        <span className="text-[7px] font-bold text-blue-600 bg-blue-100/40 px-1 rounded-sm leading-tight">
-                          ฿{dayOTTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                        </span>
-                      </div>
+                    {dayOTTotal > 0 && (
+                      <span className="text-[7px] font-bold text-blue-600 leading-tight">
+                        ฿{dayOTTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </span>
                     )}
                   </button>
                 );
               })}
             </div>
-            <div className="mt-6 flex items-center gap-2 justify-center">
-              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase">ตัวเลขในช่องคือยอดโอทีรวมรายวัน</span>
-            </div>
+            <p className="text-center text-[9px] text-slate-300 mt-4 uppercase font-bold tracking-widest">แตะที่วันเพื่อดูรายละเอียดหรือเพิ่มรายการ</p>
           </div>
         ) : (
           <div className="space-y-3">
              {filteredRecords.map(record => (
-                <div key={record.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 ios-active group overflow-hidden relative">
-                  <div className="w-12 h-12 rounded-2xl bg-slate-50 flex flex-col items-center justify-center flex-shrink-0 border border-slate-100">
+                <div key={record.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 ios-active overflow-hidden">
+                  <div className="w-12 h-12 rounded-2xl bg-slate-50 flex flex-col items-center justify-center border border-slate-100 flex-shrink-0">
                     <span className="text-xs font-bold text-slate-900 leading-none">{parseLocalDate(record.date).getDate()}</span>
                     <span className="text-[8px] font-bold text-slate-400 uppercase mt-0.5">{MONTHS_TH[parseLocalDate(record.date).getMonth()].substring(0, 3)}</span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-slate-800">{record.hours} ชั่วโมง</span>
+                      <span className="text-sm font-bold text-slate-800">{record.hours} ชม.</span>
                       <span className="text-[8px] font-bold bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full uppercase">x{record.type}</span>
                     </div>
-                    {record.note && <p className="text-[10px] text-slate-400 truncate mt-0.5">{record.note}</p>}
+                    {record.note && <p className="text-[10px] text-slate-400 truncate mt-0.5 font-medium">{record.note}</p>}
                   </div>
-                  <div className="text-right flex items-center gap-1">
+                  <div className="text-right flex items-center gap-3">
                      <span className="text-base font-bold text-slate-900">฿{record.totalAmount.toLocaleString()}</span>
-                     <button onClick={(e) => { e.stopPropagation(); setRecordToDelete(record); }} className="p-3 text-slate-200 hover:text-red-500 ios-active"><Trash2 className="w-5 h-5" /></button>
+                     <button onClick={() => setRecords(prev => prev.filter(r => r.id !== record.id))} className="text-slate-200 hover:text-red-500 p-2 ios-active"><Trash2 className="w-5 h-5" /></button>
                   </div>
                 </div>
              ))}
              {filteredRecords.length === 0 && (
-                <div className="text-center py-20 opacity-30">
-                   <CalendarIcon className="w-12 h-12 mx-auto mb-4 text-slate-300" />
-                   <p className="font-bold text-slate-400 uppercase tracking-widest text-xs">ไม่มีรายการในรอบเดือนนี้</p>
-                </div>
+               <div className="py-20 text-center opacity-20">
+                  <CalendarIcon className="w-12 h-12 mx-auto mb-4" />
+                  <p className="text-xs font-bold uppercase tracking-widest">ไม่มีรายการบันทึก</p>
+               </div>
              )}
           </div>
         )}
       </main>
 
-      <nav className="fixed bottom-0 left-0 right-0 p-8 pb-[calc(2rem+env(safe-area-inset-bottom))] pointer-events-none flex justify-center z-40">
-        <button onClick={() => { setFormData({ ...formData, date: formatLocalISO(new Date()) }); setIsAdding(true); }} className="pointer-events-auto bg-blue-600 text-white w-20 h-20 rounded-full shadow-2xl flex items-center justify-center ios-active border-4 border-white">
+      <nav className="fixed bottom-0 left-0 right-0 p-8 pb-[calc(2rem+env(safe-area-inset-bottom))] flex justify-center z-40">
+        <button onClick={() => setIsAdding(true)} className="bg-blue-600 text-white w-20 h-20 rounded-full shadow-2xl flex items-center justify-center border-4 border-white ios-active">
           <Plus className="w-10 h-10" />
         </button>
       </nav>
 
-      {/* Selected Day Records Modal */}
-      {selectedDayInfo && (
-        <div className="fixed inset-0 z-[60] flex items-end justify-center">
-           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedDayInfo(null)}></div>
-           <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full duration-500 max-h-[80vh] overflow-y-auto">
-              <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-6"></div>
-              <div className="flex justify-between items-center mb-6">
-                 <h3 className="text-xl font-bold">รายการวันที่ {parseLocalDate(selectedDayInfo.dateStr).getDate()} {MONTHS_TH[parseLocalDate(selectedDayInfo.dateStr).getMonth()]}</h3>
-                 <button onClick={() => { setIsAdding(true); setFormData({...formData, date: selectedDayInfo.dateStr}); setSelectedDayInfo(null); }} className="p-2 bg-blue-50 text-blue-600 rounded-full"><Plus className="w-5 h-5" /></button>
-              </div>
-              <div className="space-y-3">
-                 {selectedDayInfo.records.map(record => (
-                    <div key={record.id} className="bg-slate-50 p-4 rounded-2xl flex justify-between items-center border border-slate-100">
-                       <div>
-                          <div className="flex items-center gap-2">
-                             <span className="font-bold text-slate-800">{record.hours} ชม.</span>
-                             <span className="text-[10px] bg-white px-2 py-0.5 rounded-full border border-slate-200">x{record.type}</span>
-                          </div>
-                          {record.note && <p className="text-[10px] text-slate-400 mt-0.5">{record.note}</p>}
-                       </div>
-                       <div className="flex items-center gap-3">
-                          <span className="font-bold">฿{record.totalAmount.toLocaleString()}</span>
-                          <button onClick={() => setRecordToDelete(record)} className="text-red-400 p-2"><Trash2 className="w-4 h-4" /></button>
-                       </div>
-                    </div>
-                 ))}
-              </div>
-           </div>
-        </div>
-      )}
-
+      {/* Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right duration-300">
            <header className="px-6 py-6 pt-[calc(1.5rem+env(safe-area-inset-top))] flex justify-between items-center bg-white border-b border-slate-100">
-              <h3 className="text-2xl font-bold text-slate-900">การตั้งค่า</h3>
+              <h3 className="text-2xl font-bold">การตั้งค่า</h3>
               <button onClick={() => setIsSettingsOpen(false)} className="text-blue-600 font-bold px-4 py-2 ios-active">เสร็จสิ้น</button>
            </header>
            <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-10">
-              <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-green-50 rounded-3xl p-5 border border-green-100">
-                      <div className="flex items-center gap-2 mb-2">
-                          <Gift className="w-3 h-3 text-green-600" />
-                          <span className="text-[10px] font-bold text-green-600 uppercase">รวมสวัสดิการ</span>
-                      </div>
-                      <span className="text-lg font-bold text-green-700">฿{(settings.foodAllowance + settings.diligenceAllowance).toLocaleString()}</span>
-                  </div>
-                  <div className="bg-red-50 rounded-3xl p-5 border border-red-100">
-                      <div className="flex items-center gap-2 mb-2">
-                          <MinusCircle className="w-3 h-3 text-red-600" />
-                          <span className="text-[10px] font-bold text-red-600 uppercase">รวมรายการหัก</span>
-                      </div>
-                      <span className="text-lg font-bold text-red-700">฿{(calculatedSocialSecurity + calculatedPvdAmount).toLocaleString()}</span>
-                  </div>
+              {/* User Profile Info */}
+              <div className="bg-white rounded-[2rem] p-6 shadow-sm border flex items-center gap-4 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-blue-50 rounded-full -mr-12 -mt-12 opacity-50"></div>
+                <img src={user.picture} alt="profile" className="w-16 h-16 rounded-2xl object-cover shadow-lg relative" />
+                <div className="flex-1 relative">
+                    <h4 className="font-bold text-slate-900">{user.name}</h4>
+                    <p className="text-xs text-slate-400 font-medium">{user.email}</p>
+                </div>
+                <button onClick={logout} className="p-3 bg-red-50 text-red-500 rounded-2xl ios-active"><LogOut className="w-5 h-5" /></button>
               </div>
 
-              <SettingSection title="ข้อมูลรายได้พื้นฐาน">
-                  <SettingRow label="เงินเดือนหลัก (ปัจจุบัน)" value={settings.baseSalary} onChange={v => setSettings({...settings, baseSalary: parseFloat(v) || 0})} />
+              <SettingSection title="ข้อมูลรายได้">
+                  <SettingRow label="เงินเดือนหลัก" value={settings.baseSalary} onChange={v => setSettings({...settings, baseSalary: parseFloat(v) || 0})} />
                   <SettingRow label="ค่าอาหาร (คิดรวมประกันสังคม)" value={settings.foodAllowance} onChange={v => setSettings({...settings, foodAllowance: parseFloat(v) || 0})} />
                   <SettingRow label="เบี้ยขยัน" value={settings.diligenceAllowance} onChange={v => setSettings({...settings, diligenceAllowance: parseFloat(v) || 0})} />
-              </SettingSection>
-
-              <SettingSection title="ประวัติเงินเดือน (ย้อนหลัง)">
-                  <div className="p-6 space-y-4">
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight leading-relaxed">
-                        ระบุเงินเดือนเฉพาะเดือนที่แตกต่างจากเงินเดือนหลัก เดือนที่ไม่ได้ระบุจะใช้ค่าเริ่มต้น
-                      </p>
-                      <div className="flex gap-2 items-center">
-                          <input type="month" value={customSalaryMonth} onChange={e => setCustomSalaryMonth(e.target.value)} className="flex-1 bg-slate-50 border p-3 rounded-2xl text-sm font-bold text-black" />
-                          <input type="number" value={customSalaryAmount} onChange={e => setCustomSalaryAmount(parseFloat(e.target.value) || 0)} placeholder="จำนวนเงิน" className="w-28 bg-slate-50 border p-3 rounded-2xl text-sm font-bold text-right text-black" />
-                          <button onClick={addCustomSalary} className="p-3 bg-blue-600 text-white rounded-2xl shadow-lg ios-active"><PlusCircle className="w-5 h-5" /></button>
-                      </div>
-                      <div className="pt-4 space-y-2">
-                          {Object.entries(settings.monthlySalaries || {}).sort((a,b) => b[0].localeCompare(a[0])).map(([key, amount]) => (
-                            <div key={key} className="flex justify-between items-center p-3 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
-                                <div className="flex items-center gap-2">
-                                    <CalendarDays className="w-4 h-4 text-slate-400" />
-                                    <span className="text-sm font-bold text-slate-600">{key.split('-')[0]} / {MONTHS_TH[parseInt(key.split('-')[1])-1]}</span>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                    <span className="text-sm font-bold text-slate-900">฿{amount.toLocaleString()}</span>
-                                    <button onClick={() => removeCustomSalary(key)} className="text-red-400 ios-active"><XCircle className="w-4 h-4" /></button>
-                                </div>
-                            </div>
-                          ))}
-                      </div>
-                  </div>
-              </SettingSection>
-
-              <SettingSection title="การคำนวณพื้นฐาน">
-                  <SettingRow label="วันทำงาน/เดือน" value={settings.workingDaysPerMonth} onChange={v => setSettings({...settings, workingDaysPerMonth: parseInt(v) || 0})} />
-                  <SettingRow label="ชั่วโมงทำงาน/วัน" value={settings.workingHoursPerDay} onChange={v => setSettings({...settings, workingHoursPerDay: parseInt(v) || 0})} />
               </SettingSection>
 
               <SettingSection title="รายการหัก">
                   <div className="flex justify-between items-center px-6 py-5">
                       <label className="text-sm font-bold text-slate-600">หักประกันสังคม (ฐานเงินเดือน+ค่าอาหาร)</label>
-                      <button 
-                        onClick={() => setSettings({...settings, enableSocialSecurity: !settings.enableSocialSecurity})}
-                        className={`w-12 h-6 rounded-full transition-colors relative ${settings.enableSocialSecurity ? 'bg-blue-600' : 'bg-slate-200'}`}
-                      >
+                      <button onClick={() => setSettings({...settings, enableSocialSecurity: !settings.enableSocialSecurity})} className={`w-12 h-6 rounded-full transition-colors relative ${settings.enableSocialSecurity ? 'bg-blue-600' : 'bg-slate-200'}`}>
                         <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${settings.enableSocialSecurity ? 'left-7' : 'left-1'}`}></div>
                       </button>
                   </div>
-                  {settings.enableSocialSecurity && (
-                    <>
-                      <SettingRow label="อัตราหัก (%)" value={settings.socialSecurityRate} onChange={v => setSettings({...settings, socialSecurityRate: parseFloat(v) || 0})} />
-                      <SettingRow label="สูงสุดไม่เกิน (บาท)" value={settings.socialSecurityMax} onChange={v => setSettings({...settings, socialSecurityMax: parseFloat(v) || 0})} />
-                    </>
-                  )}
                   <SettingRow label="หักกองทุนสำรองฯ (%)" value={settings.providentFundRate} onChange={v => setSettings({...settings, providentFundRate: parseFloat(v) || 0})} />
+              </SettingSection>
+
+              <SettingSection title="พื้นฐานการคำนวณ">
+                  <SettingRow label="วันทำงาน/เดือน" value={settings.workingDaysPerMonth} onChange={v => setSettings({...settings, workingDaysPerMonth: parseInt(v) || 0})} />
+                  <SettingRow label="ชั่วโมงทำงาน/วัน" value={settings.workingHoursPerDay} onChange={v => setSettings({...settings, workingHoursPerDay: parseInt(v) || 0})} />
               </SettingSection>
            </div>
         </div>
       )}
 
+      {/* Add Record Modal */}
       {isAdding && (
         <div className="fixed inset-0 z-50 flex items-end justify-center">
           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setIsAdding(false)}></div>
           <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full duration-500">
               <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-8"></div>
-              <h3 className="text-2xl font-bold mb-6">บันทึกเวลาโอที</h3>
+              <h3 className="text-2xl font-bold mb-6">บันทึกโอที</h3>
               <form onSubmit={handleAddRecord} className="space-y-6">
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">วันที่ทำงาน</label>
@@ -582,16 +536,37 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {recordToDelete && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-xs rounded-[2rem] overflow-hidden text-center p-8 space-y-6">
-              <h3 className="text-lg font-bold">ยืนยันการลบรายการนี้?</h3>
-              <p className="text-xs text-slate-400">รายการนี้จะถูกลบออกจากบันทึกของคุณอย่างถาวร</p>
-              <div className="grid grid-cols-2 gap-4">
-                <button onClick={() => setRecordToDelete(null)} className="py-3 bg-slate-100 rounded-xl font-medium ios-active text-slate-600">ยกเลิก</button>
-                <button onClick={confirmDelete} className="py-3 bg-red-500 text-white rounded-xl font-bold ios-active shadow-lg shadow-red-100">ลบรายการ</button>
+      {/* Selected Day Details Modal */}
+      {selectedDayInfo && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center">
+           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedDayInfo(null)}></div>
+           <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full duration-500 max-h-[80vh] overflow-y-auto">
+              <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-6"></div>
+              <div className="flex justify-between items-center mb-6 px-2">
+                 <h3 className="text-xl font-bold">วันที่ {parseLocalDate(selectedDayInfo.dateStr).getDate()} {MONTHS_TH[parseLocalDate(selectedDayInfo.dateStr).getMonth()]}</h3>
+                 <button onClick={() => { setIsAdding(true); setFormData({...formData, date: selectedDayInfo.dateStr}); setSelectedDayInfo(null); }} className="p-3 bg-blue-50 text-blue-600 rounded-2xl ios-active"><Plus className="w-5 h-5" /></button>
               </div>
-          </div>
+              <div className="space-y-3">
+                 {selectedDayInfo.records.map(record => (
+                    <div key={record.id} className="bg-slate-50 p-5 rounded-3xl flex justify-between items-center border border-slate-100">
+                       <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                             <span className="font-bold text-slate-800 text-lg">{record.hours} ชม.</span>
+                             <span className="text-[10px] bg-white px-2.5 py-1 rounded-full border border-slate-200 font-bold uppercase tracking-widest">x{record.type}</span>
+                          </div>
+                          {record.note && <p className="text-[11px] text-slate-400 mt-1 font-medium italic">{record.note}</p>}
+                       </div>
+                       <div className="flex items-center gap-4">
+                          <span className="font-bold text-lg text-slate-900">฿{record.totalAmount.toLocaleString()}</span>
+                          <button onClick={() => { 
+                             setRecords(prev => prev.filter(r => r.id !== record.id));
+                             setSelectedDayInfo(prev => prev ? {...prev, records: prev.records.filter(r => r.id !== record.id)} : null);
+                          }} className="text-red-400 p-2 ios-active"><Trash2 className="w-5 h-5" /></button>
+                       </div>
+                    </div>
+                 ))}
+              </div>
+           </div>
         </div>
       )}
     </div>

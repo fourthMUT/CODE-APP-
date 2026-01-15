@@ -9,6 +9,8 @@
     <meta name="theme-color" content="#2563eb">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <!-- Google Identity Services -->
+    <script src="https://accounts.google.com/gsi/client" async></script>
     <style>
         :root { --ios-safe-top: env(safe-area-inset-top); --ios-safe-bottom: env(safe-area-inset-bottom); }
         body {
@@ -19,6 +21,7 @@
         }
         #root { height: 100vh; display: flex; flex-direction: column; }
         input, select { font-size: 16px !important; }
+        .ios-active:active { transform: scale(0.96); opacity: 0.8; transition: 0.1s; }
     </style>
 <script type="importmap">
 {
