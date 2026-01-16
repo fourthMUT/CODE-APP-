@@ -104,7 +104,7 @@ const BreakdownRow = ({ label, value, isHighlight, isNegative }: { label: string
 const LogoImage = ({ className }: { className?: string }) => {
   const [error, setError] = useState(false);
   return (
-    <div className={`${className} flex items-center justify-center overflow-hidden bg-slate-100`}>
+    <div className={`${className} flex items-center justify-center overflow-hidden bg-slate-50 border border-slate-100`}>
       {!error ? (
         <img 
           src="logo.png" 
@@ -113,9 +113,8 @@ const LogoImage = ({ className }: { className?: string }) => {
           onError={() => setError(true)}
         />
       ) : (
-        <div className="w-full h-full bg-blue-600 flex flex-col items-center justify-center text-white p-2 text-center">
-          <TrendingUp className="w-8 h-8 mb-1" />
-          <span className="text-[10px] font-bold">BFC</span>
+        <div className="w-full h-full bg-blue-600 flex flex-col items-center justify-center text-white p-1 text-center">
+          <TrendingUp className="w-4 h-4" />
         </div>
       )}
     </div>
@@ -210,7 +209,7 @@ const App: React.FC = () => {
     } catch (e: any) {
       console.error('Cloud Sync Error:', e);
       setSyncStatus('error');
-      setSyncErrorLog(e.message || 'Unknown connection error');
+      setSyncErrorLog(e.message || 'Unknown error');
       return { success: false, error: e.message };
     }
   }, []);
@@ -234,13 +233,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (userEmail) {
       const init = async () => {
-        // 1. Load from Local immediately
         const localRecs = localStorage.getItem(`ot_recs_${userEmail}`);
         const localSett = localStorage.getItem(`ot_sett_${userEmail}`);
         if (localRecs) setRecords(JSON.parse(localRecs));
         if (localSett) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(localSett) });
-        
-        // 2. Try to sync from Cloud in background
         await handlePullData(userEmail);
         setIsFirstLoad(false);
       };
@@ -253,12 +249,10 @@ const App: React.FC = () => {
     if (userEmail && !isFirstLoad) {
       localStorage.setItem(`ot_recs_${userEmail}`, JSON.stringify(records));
       localStorage.setItem(`ot_sett_${userEmail}`, JSON.stringify(settings));
-      
       if (syncTimeoutRef.current) window.clearTimeout(syncTimeoutRef.current);
       syncTimeoutRef.current = window.setTimeout(() => {
         handlePushData();
       }, 3000);
-
       return () => {
         if (syncTimeoutRef.current) window.clearTimeout(syncTimeoutRef.current);
       };
@@ -287,15 +281,13 @@ const App: React.FC = () => {
     setRecords([]);
   };
 
-  // Copy Data for Manual Backup
   const copyManualBackup = () => {
     const backupData = JSON.stringify({ records, settings });
     const encoded = btoa(unescape(encodeURIComponent(backupData)));
     navigator.clipboard.writeText(encoded);
-    alert('คัดลอกรหัสสำรองข้อมูลแล้ว! คุณสามารถส่งรหัสนี้ไปไว้ใน Note หรือส่งไลน์ เพื่อใช้กู้ข้อมูลในเครื่องอื่นได้');
+    alert('คัดลอกรหัสข้อมูลแล้ว');
   };
 
-  // Salary Calculations
   const getSalaryForYear = (year: string) => settings.yearlySalaries[year] || settings.baseSalary;
   const currentViewSalary = useMemo(() => getSalaryForYear(currentViewMonth.split('-')[0]), [settings, currentViewMonth]);
 
@@ -400,12 +392,6 @@ const App: React.FC = () => {
             <button type="submit" className="w-full bg-[#1e3a8a] text-white p-5 rounded-2xl font-bold flex items-center justify-center gap-2 ios-active shadow-xl shadow-blue-900/20">
                เข้าสู่ระบบและกู้ข้อมูล <ArrowRight className="w-5 h-5" />
             </button>
-            <div className="flex items-start gap-3 bg-blue-50 p-4 rounded-2xl border border-blue-100">
-              <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-blue-700 leading-relaxed font-medium">
-                ข้อมูลจะถูกสำรองไว้บน Cloud อัตโนมัติทุกครั้งที่บันทึก หากเปลี่ยนเครื่อง เพียงล็อกอินด้วยอีเมลเดิม ข้อมูลจะกลับมาครบถ้วน
-              </p>
-            </div>
           </form>
         </div>
       </div>
@@ -414,44 +400,51 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen max-w-lg mx-auto bg-slate-50 relative flex flex-col overflow-hidden">
-      <header className="sticky top-0 z-30 pt-[calc(1.5rem+env(safe-area-inset-top))] bg-white/95 backdrop-blur-xl border-b border-slate-200/50 shadow-sm px-6 pb-4 flex justify-between items-center">
-        <div className="flex-1 min-w-0 flex items-center gap-3">
-          <LogoImage className="w-8 h-8 rounded-lg shadow-sm" />
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="text-[9px] font-bold text-blue-600 uppercase tracking-[0.1em] truncate block leading-none">{userEmail}</span>
-              {syncStatus === 'syncing' ? <RefreshCw className="w-2.5 h-2.5 text-blue-400 animate-spin" /> : 
-               syncStatus === 'success' ? <CheckCircle2 className="w-2.5 h-2.5 text-green-500" /> : 
-               syncStatus === 'offline' ? <WifiOff className="w-2.5 h-2.5 text-slate-400" /> :
-               syncStatus === 'error' ? <AlertCircle className="w-2.5 h-2.5 text-red-500" /> : 
-               <Cloud className="w-2.5 h-2.5 text-slate-300" />}
+      {/* Unified Sticky Header Container */}
+      <div className="sticky top-0 z-50 w-full bg-white/95 backdrop-blur-xl border-b border-slate-100 shadow-sm">
+        {/* Safe Area Spacer for iOS Notch */}
+        <div style={{ height: 'env(safe-area-inset-top)' }} className="bg-white" />
+        
+        {/* Main Brand Header */}
+        <header className="px-6 py-4 flex justify-between items-center h-16">
+          <div className="flex-1 min-w-0 flex items-center gap-3">
+            <LogoImage className="w-8 h-8 rounded-lg shadow-sm" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <span className="text-[9px] font-bold text-blue-600 uppercase tracking-[0.1em] truncate block leading-none">{userEmail}</span>
+                {syncStatus === 'syncing' ? <RefreshCw className="w-2.5 h-2.5 text-blue-400 animate-spin" /> : 
+                 syncStatus === 'success' ? <CheckCircle2 className="w-2.5 h-2.5 text-green-500" /> : 
+                 syncStatus === 'offline' ? <WifiOff className="w-2.5 h-2.5 text-slate-400" /> :
+                 syncStatus === 'error' ? <AlertCircle className="w-2.5 h-2.5 text-red-500" /> : 
+                 <Cloud className="w-2.5 h-2.5 text-slate-300" />}
+              </div>
+              <h1 className="text-base font-bold text-slate-900 leading-tight">BFC MONEY</h1>
             </div>
-            <h1 className="text-lg font-bold text-slate-900 leading-tight">BFC MONEY</h1>
           </div>
-        </div>
-        <div className="flex gap-2">
-           <button onClick={() => setViewMode('summary')} className={`p-2.5 rounded-full ios-active ${viewMode === 'summary' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-              <BarChart3 className="w-5 h-5" />
-           </button>
-           <button onClick={() => setViewMode(viewMode === 'list' ? 'calendar' : 'list')} className="p-2.5 bg-slate-100 rounded-full ios-active">
-              {viewMode === 'list' ? <LayoutGrid className="w-5 h-5 text-slate-600" /> : <ListIcon className="w-5 h-5 text-slate-600" />}
-           </button>
-           <button onClick={() => setIsSettingsOpen(true)} className="p-2.5 bg-slate-100 rounded-full ios-active">
-              <SettingsIcon className="w-5 h-5 text-slate-600" />
-           </button>
-        </div>
-      </header>
+          <div className="flex gap-2 shrink-0">
+             <button onClick={() => setViewMode('summary')} className={`p-2 rounded-full ios-active ${viewMode === 'summary' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                <BarChart3 className="w-4.5 h-4.5" />
+             </button>
+             <button onClick={() => setViewMode(viewMode === 'list' ? 'calendar' : 'list')} className="p-2 bg-slate-100 rounded-full ios-active">
+                {viewMode === 'list' ? <LayoutGrid className="w-4.5 h-4.5 text-slate-600" /> : <ListIcon className="w-4.5 h-4.5 text-slate-600" />}
+             </button>
+             <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-slate-100 rounded-full ios-active">
+                <SettingsIcon className="w-4.5 h-4.5 text-slate-600" />
+             </button>
+          </div>
+        </header>
 
-      {/* Sync Failure UI */}
-      {syncStatus === 'error' && (
-        <div className="bg-red-500 text-white text-[10px] py-2 px-6 flex items-center justify-between animate-in slide-in-from-top-2">
-          <div className="flex items-center gap-2">
-            <CloudOff className="w-3 h-3 shrink-0" />
-            <span className="font-bold">การเชื่อมต่อ Cloud ขัดข้อง ({syncErrorLog})</span>
+        {/* Sync Alert (Inside Sticky Header) */}
+        {syncStatus === 'error' && (
+          <div className="bg-red-500 text-white text-[10px] py-1.5 px-6 flex items-center justify-between animate-in slide-in-from-top-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <CloudOff className="w-3 h-3 shrink-0" />
+              <span className="font-bold truncate">การเชื่อมต่อ Cloud ขัดข้อง ({syncErrorLog})</span>
+            </div>
+            <button onClick={() => handlePushData()} className="bg-white/20 px-3 py-0.5 rounded-full font-bold hover:bg-white/30 transition-colors shrink-0 ml-2">ลองใหม่</button>
           </div>
-          <button onClick={() => handlePushData()} className="bg-white/20 px-3 py-1 rounded-full font-bold hover:bg-white/30 transition-colors">ลองใหม่</button>
-        </div>
-      )}
+        )}
+      </div>
 
       <main className="flex-1 px-4 py-6 space-y-6 pb-32 overflow-y-auto">
         {viewMode !== 'summary' ? (
@@ -517,20 +510,20 @@ const App: React.FC = () => {
                             <span className="text-[8px] text-slate-400 uppercase">{MONTHS_TH[parseLocalDate(record.date).getMonth()].substring(0,3)}</span>
                           </div>
                           <div>
-                            <div className="font-bold text-slate-800">{record.hours} ชม. <span className="text-[10px] text-blue-600 ml-1">x{record.type}</span></div>
-                            {record.note && <div className="text-[10px] text-slate-400">{record.note}</div>}
+                            <div className="font-bold text-slate-800 text-sm">{record.hours} ชม. <span className="text-[10px] text-blue-600 ml-1 font-bold">x{record.type}</span></div>
+                            {record.note && <div className="text-[10px] text-slate-400 font-medium">{record.note}</div>}
                           </div>
                       </div>
                       <div className="flex items-center gap-3">
-                          <div className="font-bold">฿{record.totalAmount.toLocaleString()}</div>
-                          <button onClick={() => setRecords(prev => prev.filter(r => r.id !== record.id))} className="text-slate-300 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                          <div className="font-bold text-sm">฿{record.totalAmount.toLocaleString()}</div>
+                          <button onClick={() => setRecords(prev => prev.filter(r => r.id !== record.id))} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
                 ))}
                 {filteredRecords.length === 0 && (
-                  <div className="text-center py-12 text-slate-300 opacity-50">
-                      <CalendarDays className="w-12 h-12 mx-auto mb-2" />
-                      <p className="text-sm font-bold">ยังไม่มีข้อมูลโอทีในรอบนี้</p>
+                  <div className="text-center py-12 text-slate-300 opacity-50 flex flex-col items-center">
+                      <CalendarDays className="w-10 h-10 mb-2" />
+                      <p className="text-xs font-bold">ยังไม่มีข้อมูลโอทีในรอบนี้</p>
                   </div>
                 )}
               </div>
@@ -595,20 +588,24 @@ const App: React.FC = () => {
         )}
       </main>
 
-      <div className="fixed bottom-10 left-0 right-0 flex justify-center pointer-events-none">
-         <button onClick={() => setIsAdding(true)} className="bg-[#1e3a8a] text-white w-16 h-16 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto ios-active">
+      {/* Action FAB */}
+      <div className="fixed bottom-10 left-0 right-0 flex justify-center pointer-events-none z-40">
+         <button onClick={() => setIsAdding(true)} className="bg-[#1e3a8a] text-white w-16 h-16 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto ios-active transform transition-transform active:scale-90">
             <Plus className="w-8 h-8" />
          </button>
       </div>
 
+      {/* Settings Modal */}
       {isSettingsOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right">
-           <header className="px-6 py-6 bg-white border-b flex justify-between items-center pt-[calc(2rem+env(safe-area-inset-top))] pb-4 shadow-sm">
-              <h3 className="text-xl font-bold">การตั้งค่าระบบ</h3>
-              <button onClick={() => setIsSettingsOpen(false)} className="text-blue-600 font-bold px-4 py-2 bg-blue-50 rounded-2xl">เสร็จสิ้น</button>
+        <div className="fixed inset-0 z-[60] bg-slate-50 flex flex-col animate-in slide-in-from-right duration-300">
+           <header className="px-6 bg-white border-b flex justify-between items-center shadow-sm">
+              <div style={{ height: 'env(safe-area-inset-top)' }} className="w-full bg-white" />
+              <div className="flex w-full justify-between items-center py-4">
+                <h3 className="text-xl font-bold">การตั้งค่า</h3>
+                <button onClick={() => setIsSettingsOpen(false)} className="text-blue-600 font-bold px-4 py-2 bg-blue-50 rounded-2xl ios-active">เสร็จสิ้น</button>
+              </div>
            </header>
            <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-32">
-              
               <SettingSection title="การเชื่อมโยงข้อมูล (Cloud V4)">
                  <div className="p-6 space-y-5">
                     <div className="flex items-center gap-4">
@@ -617,86 +614,27 @@ const App: React.FC = () => {
                            syncStatus === 'error' ? <CloudOff className="w-6 h-6" /> : <Cloud className="w-6 h-6" />}
                        </div>
                        <div className="flex-1 min-w-0">
-                          <h4 className="font-bold text-slate-800 text-sm">การสำรองข้อมูลอัตโนมัติ</h4>
+                          <h4 className="font-bold text-slate-800 text-sm">Cloud Backup</h4>
                           <p className="text-[10px] text-slate-500 truncate">
-                             {syncStatus === 'syncing' ? 'กำลังเชื่อมต่อเซิร์ฟเวอร์...' : 
-                              syncStatus === 'error' ? `ผิดพลาด: ${syncErrorLog}` : 
-                              syncStatus === 'offline' ? 'ออฟไลน์ (จะซิงค์เมื่อมีเน็ต)' : 
-                              `ซิงค์ล่าสุด: ${lastSyncTime || 'ยังไม่เคยซิงค์'}`}
+                             {syncStatus === 'error' ? `ผิดพลาด: ${syncErrorLog}` : `ซิงค์ล่าสุด: ${lastSyncTime || '-'}`}
                           </p>
                        </div>
                     </div>
-                    
                     <div className="grid grid-cols-2 gap-3">
-                      <button 
-                        onClick={() => handlePullData(userEmail!)}
-                        className="flex items-center justify-center gap-2 bg-white text-slate-700 p-4 rounded-2xl font-bold border shadow-sm ios-active"
-                      >
+                      <button onClick={() => handlePullData(userEmail!)} className="flex items-center justify-center gap-2 bg-white text-slate-700 p-4 rounded-2xl font-bold border shadow-sm ios-active">
                         <CloudDownload className="w-4 h-4" /> ดึงข้อมูล
                       </button>
-                      <button 
-                        onClick={() => handlePushData()}
-                        className="flex items-center justify-center gap-2 bg-blue-600 text-white p-4 rounded-2xl font-bold ios-active shadow-lg shadow-blue-200"
-                      >
+                      <button onClick={() => handlePushData()} className="flex items-center justify-center gap-2 bg-blue-600 text-white p-4 rounded-2xl font-bold ios-active shadow-lg">
                         <CloudUpload className="w-4 h-4" /> ส่งข้อมูล
                       </button>
                     </div>
-
-                    <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 space-y-3">
-                       <div className="flex gap-3">
-                          <Database className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-[10px] text-amber-900 font-bold mb-1">รหัสกู้คืนข้อมูล (Manual Backup)</p>
-                            <p className="text-[9px] text-amber-700 leading-relaxed">ใช้กรณี Cloud ขัดข้องหรือต้องการย้ายข้อมูลแบบรวดเร็วโดยไม่ผ่านอีเมล</p>
-                          </div>
-                       </div>
-                       <button onClick={copyManualBackup} className="w-full bg-amber-600 text-white py-2.5 rounded-xl text-[10px] font-bold flex items-center justify-center gap-2 ios-active">
-                         <Copy className="w-3 h-3" /> คัดลอกรหัสข้อมูล
-                       </button>
-                    </div>
                  </div>
               </SettingSection>
 
-              <SettingSection title="เงินเดือนประจำปี">
-                 <div className="p-6 space-y-4">
-                    <div className="flex gap-2">
-                       <input type="number" placeholder="ปี ค.ศ." value={newYearInput} onChange={e => setNewYearInput(e.target.value)} className="w-24 bg-slate-50 p-3 rounded-xl font-bold" />
-                       <input type="number" placeholder="เงินเดือน" value={newSalaryInput} onChange={e => setNewSalaryInput(e.target.value)} className="flex-1 bg-slate-50 p-3 rounded-xl font-bold" />
-                       <button onClick={() => {
-                         if (!newYearInput || !newSalaryInput) return;
-                         setSettings({...settings, yearlySalaries: {...settings.yearlySalaries, [newYearInput]: parseFloat(newSalaryInput)}});
-                         setNewSalaryInput('0');
-                       }} className="bg-blue-600 text-white p-3 rounded-xl"><Save className="w-5 h-5" /></button>
-                    </div>
-                    <div className="space-y-2">
-                       {Object.entries(settings.yearlySalaries).sort((a,b) => b[0].localeCompare(a[0])).map(([year, sal]) => (
-                          <div key={year} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl">
-                             <span className="font-bold text-sm">ปี {year}</span>
-                             <div className="flex items-center gap-3">
-                                <span className="font-bold text-blue-600">฿{sal.toLocaleString()}</span>
-                                <button onClick={() => {
-                                  const next = {...settings.yearlySalaries};
-                                  delete next[year];
-                                  setSettings({...settings, yearlySalaries: next});
-                                }} className="text-red-400 p-1"><Trash2 className="w-4 h-4" /></button>
-                             </div>
-                          </div>
-                       ))}
-                    </div>
-                 </div>
-              </SettingSection>
-
-              <SettingSection title="ข้อมูลพื้นฐาน">
-                 <SettingRow label="เงินเดือนพื้นฐาน" value={settings.baseSalary} onChange={v => setSettings({...settings, baseSalary: parseFloat(v) || 0})} />
+              <SettingSection title="ข้อมูลเงินเดือน">
+                 <SettingRow label="เงินเดือนหลัก" value={settings.baseSalary} onChange={v => setSettings({...settings, baseSalary: parseFloat(v) || 0})} />
                  <SettingRow label="วันทำงาน/เดือน" value={settings.workingDaysPerMonth} onChange={v => setSettings({...settings, workingDaysPerMonth: parseFloat(v) || 1})} />
                  <SettingRow label="ชม.ทำงาน/วัน" value={settings.workingHoursPerDay} onChange={v => setSettings({...settings, workingHoursPerDay: parseFloat(v) || 1})} />
-              </SettingSection>
-
-              <SettingSection title="สวัสดิการอื่นๆ">
-                 <SettingRow label="ค่าอาหาร" value={settings.foodAllowance} onChange={v => setSettings({...settings, foodAllowance: parseFloat(v) || 0})} />
-                 <SettingRow label="เบี้ยขยัน" value={settings.diligenceAllowance} onChange={v => setSettings({...settings, diligenceAllowance: parseFloat(v) || 0})} />
-                 <SettingRow label="ค่ากะ" value={settings.shiftAllowance} onChange={v => setSettings({...settings, shiftAllowance: parseFloat(v) || 0})} />
-                 <SettingRow label="รายรับพิเศษ" value={settings.specialIncome} onChange={v => setSettings({...settings, specialIncome: parseFloat(v) || 0})} />
               </SettingSection>
 
               <button onClick={handleLogoutAction} className={`w-full p-5 rounded-2xl font-bold border transition-all ${logoutConfirm ? 'bg-red-600 text-white border-red-700' : 'bg-red-50 text-red-600 border-red-100'}`}>
@@ -706,42 +644,43 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Record Modal */}
       {isAdding && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center">
+        <div className="fixed inset-0 z-[70] flex items-end justify-center">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsAdding(false)}></div>
           <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full duration-500">
-              <h3 className="text-2xl font-bold mb-6">บันทึกเวลาโอที</h3>
+              <h3 className="text-2xl font-bold mb-6">บันทึกโอที</h3>
               <form onSubmit={handleAddRecord} className="space-y-6">
                 <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">วันที่ทำงาน</label>
-                   <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold" />
+                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">วันที่</label>
+                   <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold" />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">ชั่วโมงที่ทำ</label>
-                    <input type="number" step="0.5" value={formData.hours} onChange={e => setFormData({...formData, hours: parseFloat(e.target.value) || 0})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold" />
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">ชั่วโมง</label>
+                    <input type="number" step="0.5" value={formData.hours} onChange={e => setFormData({...formData, hours: parseFloat(e.target.value) || 0})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">เรทค่าแรง</label>
-                    <select value={formData.type} onChange={e => setFormData({...formData, type: parseFloat(e.target.value) as OTType})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">เรท</label>
+                    <select value={formData.type} onChange={e => setFormData({...formData, type: parseFloat(e.target.value) as OTType})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold">
                       {OT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                     </select>
                   </div>
                 </div>
-                <input type="text" placeholder="หมายเหตุ (ถ้ามี)" value={formData.note} onChange={e => setFormData({...formData, note: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border font-bold" />
                 <button type="submit" className="w-full bg-blue-600 text-white p-5 rounded-2xl font-bold shadow-xl ios-active">บันทึกข้อมูล</button>
               </form>
           </div>
         </div>
       )}
 
+      {/* Day Details Modal */}
       {selectedDayInfo && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center">
+        <div className="fixed inset-0 z-[70] flex items-end justify-center">
            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedDayInfo(null)}></div>
            <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full max-h-[80vh] overflow-y-auto">
               <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-6"></div>
               <div className="flex justify-between items-center mb-6">
-                 <h3 className="text-xl font-bold text-slate-900">รายละเอียด {parseLocalDate(selectedDayInfo.dateStr).getDate()} {MONTHS_TH[parseLocalDate(selectedDayInfo.dateStr).getMonth()]}</h3>
+                 <h3 className="text-xl font-bold text-slate-900">รายละเอียดวันที่ {parseLocalDate(selectedDayInfo.dateStr).getDate()}</h3>
                  <button onClick={() => { setIsAdding(true); setFormData({...formData, date: selectedDayInfo.dateStr}); setSelectedDayInfo(null); }} className="p-2 bg-blue-50 text-blue-600 rounded-full ios-active"><Plus className="w-5 h-5" /></button>
               </div>
               <div className="space-y-3 pb-12">
@@ -756,7 +695,7 @@ const App: React.FC = () => {
                        </div>
                        <div className="flex items-center gap-4">
                           <span className="font-bold text-lg text-slate-900">฿{record.totalAmount.toLocaleString()}</span>
-                          <button onClick={() => { setRecords(prev => prev.filter(r => r.id !== record.id)); setSelectedDayInfo(null); }} className="text-red-400 p-2 ios-active"><Trash2 className="w-5 h-5" /></button>
+                          <button onClick={() => { setRecords(prev => prev.filter(r => r.id !== record.id)); setSelectedDayInfo(null); }} className="text-red-400 p-2 ios-active transition-colors"><Trash2 className="w-5 h-5" /></button>
                        </div>
                     </div>
                  ))}
