@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Plus, 
   Settings as SettingsIcon, 
@@ -28,10 +28,17 @@ import {
   Upload,
   RefreshCw,
   CheckCircle2,
-  Database
+  Database,
+  Cloud,
+  CloudOff,
+  CloudDownload,
+  CloudUpload
 } from 'lucide-react';
 import { OTRecord, UserSettings, OTType } from './types.ts';
 import { OT_TYPES, DEFAULT_SETTINGS, MONTHS_TH } from './constants.ts';
+
+// คีย์สำหรับ Cloud Storage (ใช้ชื่อแอปเพื่อแยก namespace)
+const CLOUD_BUCKET = 'bfc_money_v2_storage';
 
 const formatLocalISO = (date: Date) => {
   const y = date.getFullYear();
@@ -127,9 +134,8 @@ const App: React.FC = () => {
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [selectedDayInfo, setSelectedDayInfo] = useState<{ dateStr: string, records: OTRecord[] } | null>(null);
 
-  const [syncCode, setSyncCode] = useState('');
-  const [showSyncSuccess, setShowSyncSuccess] = useState(false);
-  const [importInput, setImportInput] = useState('');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  const [isFirstLoad, setIsFirstLoad] = useState(true);
 
   const [formData, setFormData] = useState({
     date: formatLocalISO(new Date()),
@@ -141,34 +147,96 @@ const App: React.FC = () => {
   const [newYearInput, setNewYearInput] = useState(new Date().getFullYear().toString());
   const [newSalaryInput, setNewSalaryInput] = useState('0');
 
-  useEffect(() => {
-    if (userEmail) {
-      const savedRecords = localStorage.getItem(`ot_records_${userEmail}`);
-      const savedSettings = localStorage.getItem(`user_settings_${userEmail}`);
-      setRecords(savedRecords ? JSON.parse(savedRecords) : []);
-      const parsedSettings = savedSettings ? JSON.parse(savedSettings) : DEFAULT_SETTINGS;
-      setSettings({
-        ...DEFAULT_SETTINGS,
-        ...parsedSettings,
-        yearlySalaries: parsedSettings.yearlySalaries || {}
+  // ฟังก์ชัน Cloud Sync - บันทึก
+  const saveToCloud = useCallback(async (dataToSave: { records: OTRecord[], settings: UserSettings }) => {
+    if (!userEmail) return;
+    setSyncStatus('syncing');
+    try {
+      const emailKey = btoa(userEmail).replace(/=/g, ''); // สร้าง key ที่ปลอดภัยจาก email
+      const response = await fetch(`https://kvdb.io/${CLOUD_BUCKET}/${emailKey}`, {
+        method: 'POST',
+        body: JSON.stringify(dataToSave)
       });
+      if (response.ok) {
+        setSyncStatus('success');
+        setTimeout(() => setSyncStatus('idle'), 2000);
+      } else {
+        setSyncStatus('error');
+      }
+    } catch (e) {
+      setSyncStatus('error');
     }
   }, [userEmail]);
 
-  useEffect(() => {
-    if (userEmail) localStorage.setItem(`ot_records_${userEmail}`, JSON.stringify(records));
-  }, [records, userEmail]);
+  // ฟังก์ชัน Cloud Sync - ดึงข้อมูล
+  const loadFromCloud = useCallback(async (email: string) => {
+    setSyncStatus('syncing');
+    try {
+      const emailKey = btoa(email).replace(/=/g, '');
+      const response = await fetch(`https://kvdb.io/${CLOUD_BUCKET}/${emailKey}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.records) {
+          setRecords(data.records);
+          setSettings(data.settings);
+          setSyncStatus('success');
+          setTimeout(() => setSyncStatus('idle'), 2000);
+          return true;
+        }
+      }
+      setSyncStatus('idle');
+      return false;
+    } catch (e) {
+      setSyncStatus('error');
+      return false;
+    }
+  }, []);
 
+  // โหลดข้อมูลครั้งแรก
   useEffect(() => {
-    if (userEmail) localStorage.setItem(`user_settings_${userEmail}`, JSON.stringify(settings));
-  }, [settings, userEmail]);
+    if (userEmail) {
+      const init = async () => {
+        // ลองโหลดจาก Cloud ก่อน
+        const success = await loadFromCloud(userEmail);
+        
+        // ถ้าโหลดจาก Cloud ไม่ได้ ให้เอาจาก Local
+        if (!success) {
+          const savedRecords = localStorage.getItem(`ot_records_${userEmail}`);
+          const savedSettings = localStorage.getItem(`user_settings_${userEmail}`);
+          if (savedRecords) setRecords(JSON.parse(savedRecords));
+          if (savedSettings) {
+            const parsedSettings = JSON.parse(savedSettings);
+            setSettings({ ...DEFAULT_SETTINGS, ...parsedSettings });
+          }
+        }
+        setIsFirstLoad(false);
+      };
+      init();
+    }
+  }, [userEmail, loadFromCloud]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  // บันทึกลง Local และ Cloud เมื่อมีการเปลี่ยนแปลง
+  useEffect(() => {
+    if (userEmail && !isFirstLoad) {
+      localStorage.setItem(`ot_records_${userEmail}`, JSON.stringify(records));
+      localStorage.setItem(`user_settings_${userEmail}`, JSON.stringify(settings));
+      
+      // หน่วงเวลาบันทึก Cloud เพื่อไม่ให้ยิง API ถี่เกินไป
+      const timer = setTimeout(() => {
+        saveToCloud({ records, settings });
+      }, 1500);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [records, settings, userEmail, isFirstLoad, saveToCloud]);
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (emailInput.includes('@')) {
       const email = emailInput.toLowerCase().trim();
       localStorage.setItem('ot_bfc_user_email', email);
       setUserEmail(email);
+      // ข้อมูลจะถูกดึงอัตโนมัติจาก useEffect ด้านบน
     }
   };
 
@@ -181,40 +249,7 @@ const App: React.FC = () => {
     localStorage.removeItem('ot_bfc_user_email');
     setUserEmail(null);
     setIsSettingsOpen(false);
-  };
-
-  // ระบบ Backup & Restore
-  const exportData = () => {
-    const data = {
-      records,
-      settings,
-      timestamp: Date.now(),
-      email: userEmail
-    };
-    const code = btoa(encodeURIComponent(JSON.stringify(data)));
-    setSyncCode(code);
-    navigator.clipboard.writeText(code);
-    setShowSyncSuccess(true);
-    setTimeout(() => setShowSyncSuccess(false), 3000);
-  };
-
-  const importData = () => {
-    try {
-      if (!importInput) return;
-      const decoded = JSON.parse(decodeURIComponent(atob(importInput)));
-      if (decoded.records && decoded.settings) {
-        if (window.confirm('คุณต้องการนำเข้าข้อมูลและเขียนทับข้อมูลปัจจุบันหรือไม่?')) {
-          setRecords(decoded.records);
-          setSettings(decoded.settings);
-          setImportInput('');
-          alert('นำเข้าข้อมูลสำเร็จแล้ว!');
-        }
-      } else {
-        alert('รหัสข้อมูลไม่ถูกต้อง');
-      }
-    } catch (e) {
-      alert('รหัสข้อมูลไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
-    }
+    setIsFirstLoad(true);
   };
 
   const getSalaryForYear = (year: string) => {
@@ -354,7 +389,7 @@ const App: React.FC = () => {
              <LogoImage className="w-32 h-32 bg-[#0ea5e9]/10 rounded-[2.5rem] shadow-2xl p-1" />
              <div className="text-center">
                 <h1 className="text-4xl font-bold text-white tracking-tight">BFC MONEY</h1>
-                <p className="text-[#0ea5e9] font-bold text-xs uppercase tracking-[0.3em] mt-2">OT & INCOME TRACKER</p>
+                <p className="text-[#0ea5e9] font-bold text-xs uppercase tracking-[0.3em] mt-2">REAL-TIME CLOUD SYNC</p>
              </div>
           </div>
           <form onSubmit={handleLogin} className="bg-white p-8 rounded-[2.5rem] shadow-2xl border border-white/10 space-y-6">
@@ -367,13 +402,13 @@ const App: React.FC = () => {
                />
             </div>
             <button type="submit" className="w-full bg-[#1e3a8a] text-white p-5 rounded-2xl font-bold flex items-center justify-center gap-2 ios-active shadow-lg shadow-blue-900/20">
-               เข้าสู่ระบบ <ArrowRight className="w-5 h-5" />
+               เข้าสู่ระบบและซิงค์ข้อมูล <ArrowRight className="w-5 h-5" />
             </button>
 
             <div className="flex items-start gap-3 bg-blue-50 p-4 rounded-2xl border border-blue-100">
-              <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+              <Cloud className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
               <p className="text-[11px] text-blue-700 leading-relaxed font-medium">
-                ข้อมูลของคุณจะถูกเก็บไว้ **ในเครื่องนี้เท่านั้น** เพื่อความเป็นส่วนตัว หากต้องการย้ายเครื่อง กรุณาใช้รหัสสำรองข้อมูลในหน้าตั้งค่า
+                ล็อกอินด้วย Email เดิมเพื่อดึงข้อมูลจาก Cloud อัตโนมัติ ข้อมูลจะลิงก์กันแบบเรียลไทม์ทุกอุปกรณ์
               </p>
             </div>
           </form>
@@ -388,7 +423,13 @@ const App: React.FC = () => {
         <div className="flex-1 min-w-0 flex items-center gap-3">
           <LogoImage className="w-8 h-8 rounded-lg" />
           <div className="min-w-0">
-            <span className="text-[9px] font-bold text-blue-600 uppercase tracking-[0.15em] truncate block leading-none mb-1">{userEmail}</span>
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="text-[9px] font-bold text-blue-600 uppercase tracking-[0.15em] truncate block leading-none">{userEmail}</span>
+              {syncStatus === 'syncing' ? <RefreshCw className="w-2.5 h-2.5 text-blue-400 animate-spin" /> : 
+               syncStatus === 'success' ? <CheckCircle2 className="w-2.5 h-2.5 text-green-500" /> : 
+               syncStatus === 'error' ? <CloudOff className="w-2.5 h-2.5 text-red-400" /> : 
+               <Cloud className="w-2.5 h-2.5 text-slate-300" />}
+            </div>
             <h1 className="text-lg font-bold text-slate-900 leading-tight">BFC MONEY</h1>
           </div>
         </div>
@@ -573,40 +614,25 @@ const App: React.FC = () => {
            </header>
            <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-32">
               
-              <SettingSection title="สำรองและย้ายข้อมูล (Sync)">
+              <SettingSection title="Cloud Sync (เรียลไทม์)">
                  <div className="p-6 space-y-4">
-                    <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-                      หากคุณต้องการเปลี่ยนโทรศัพท์ ให้กดปุ่ม **"คัดลอกรหัสสำรองข้อมูล"** แล้วนำไปวางในช่อง **"นำเข้าข้อมูล"** ที่เครื่องใหม่ ข้อมูลจะถูกโอนไปทันที
-                    </p>
-                    <div className="flex flex-col gap-3">
-                       <button 
-                         onClick={exportData}
-                         className="flex items-center justify-center gap-2 bg-blue-50 text-blue-600 p-4 rounded-2xl font-bold ios-active border border-blue-100"
-                       >
-                         {showSyncSuccess ? <CheckCircle2 className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
-                         {showSyncSuccess ? 'คัดลอกสำเร็จ!' : 'คัดลอกรหัสสำรองข้อมูล'}
-                       </button>
-
-                       <div className="space-y-2 pt-2 border-t">
-                          <label className="text-[10px] font-bold text-slate-400 uppercase">นำเข้าจากเครื่องอื่น</label>
-                          <div className="flex gap-2">
-                             <input 
-                               type="text" 
-                               placeholder="วางรหัสสำรองข้อมูลที่นี่..." 
-                               value={importInput}
-                               onChange={(e) => setImportInput(e.target.value)}
-                               className="flex-1 bg-slate-50 p-3 rounded-xl text-xs font-normal border border-slate-100"
-                             />
-                             <button 
-                               onClick={importData}
-                               disabled={!importInput}
-                               className={`p-3 rounded-xl text-white ios-active ${importInput ? 'bg-blue-600' : 'bg-slate-300'}`}
-                             >
-                               <Upload className="w-5 h-5" />
-                             </button>
-                          </div>
+                    <div className="flex items-center gap-3">
+                       <div className={`p-3 rounded-2xl ${syncStatus === 'error' ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
+                          {syncStatus === 'syncing' ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Cloud className="w-6 h-6" />}
+                       </div>
+                       <div>
+                          <h4 className="font-bold text-slate-800">ระบบซิงค์ข้อมูลอัตโนมัติ</h4>
+                          <p className="text-[10px] text-slate-500">สถานะ: {syncStatus === 'syncing' ? 'กำลังบันทึก...' : 
+                                                                     syncStatus === 'success' ? 'บันทึกข้อมูลล่าสุดแล้ว' : 
+                                                                     syncStatus === 'error' ? 'การเชื่อมต่อผิดพลาด' : 'พร้อมใช้งาน'}</p>
                        </div>
                     </div>
+                    <button 
+                      onClick={() => loadFromCloud(userEmail!)}
+                      className="w-full flex items-center justify-center gap-2 bg-blue-50 text-blue-600 p-4 rounded-2xl font-bold ios-active border border-blue-100"
+                    >
+                      <RefreshCw className="w-4 h-4" /> ดึงข้อมูลจาก Cloud ตอนนี้
+                    </button>
                  </div>
               </SettingSection>
 
