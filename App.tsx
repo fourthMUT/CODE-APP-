@@ -19,7 +19,16 @@ import {
   ArrowRight,
   AlertCircle,
   Calendar as CalendarIcon,
-  Save
+  Save,
+  BarChart3,
+  History,
+  TrendingUp,
+  Copy,
+  Download,
+  Upload,
+  RefreshCw,
+  CheckCircle2,
+  Database
 } from 'lucide-react';
 import { OTRecord, UserSettings, OTType } from './types.ts';
 import { OT_TYPES, DEFAULT_SETTINGS, MONTHS_TH } from './constants.ts';
@@ -34,6 +43,22 @@ const formatLocalISO = (date: Date) => {
 const parseLocalDate = (dateStr: string) => {
   const [y, m, d] = dateStr.split('-').map(Number);
   return new Date(y, m - 1, d);
+};
+
+const getCycleMonthStr = (dateStr: string) => {
+  const date = parseLocalDate(dateStr);
+  const day = date.getDate();
+  let cycleMonth = date.getMonth();
+  let cycleYear = date.getFullYear();
+
+  if (day > 15) {
+    cycleMonth += 1;
+    if (cycleMonth > 11) {
+      cycleMonth = 0;
+      cycleYear += 1;
+    }
+  }
+  return `${cycleYear}-${String(cycleMonth + 1).padStart(2, '0')}`;
 };
 
 const SettingSection = ({ title, children }: { title: string, children?: React.ReactNode }) => (
@@ -63,25 +88,48 @@ const BreakdownRow = ({ label, value, isHighlight, isNegative }: { label: string
   </div>
 );
 
+const LogoImage = ({ className }: { className?: string }) => {
+  const [error, setError] = useState(false);
+  return (
+    <div className={`${className} flex items-center justify-center overflow-hidden`}>
+      {!error ? (
+        <img 
+          src="logo.png" 
+          alt="BFC MONEY" 
+          className="w-full h-full object-contain"
+          onError={() => setError(true)}
+        />
+      ) : (
+        <div className="w-full h-full bg-blue-600 flex flex-col items-center justify-center text-white p-2">
+          <TrendingUp className="w-1/2 h-1/2" />
+          <span className="text-[8px] font-bold mt-1">BFC</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const App: React.FC = () => {
   const [userEmail, setUserEmail] = useState<string | null>(() => localStorage.getItem('ot_bfc_user_email'));
   const [emailInput, setEmailInput] = useState('');
   const [logoutConfirm, setLogoutConfirm] = useState(false);
   const [records, setRecords] = useState<OTRecord[]>([]);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
-  const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'calendar' | 'summary'>('list');
   
   const [currentViewMonth, setCurrentViewMonth] = useState(() => {
     const now = new Date();
-    const targetMonth = now.getDate() > 15 ? now.getMonth() + 1 : now.getMonth();
-    const d = new Date(now.getFullYear(), targetMonth, 1);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return getCycleMonthStr(formatLocalISO(now));
   });
 
   const [isAdding, setIsAdding] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [selectedDayInfo, setSelectedDayInfo] = useState<{ dateStr: string, records: OTRecord[] } | null>(null);
+
+  const [syncCode, setSyncCode] = useState('');
+  const [showSyncSuccess, setShowSyncSuccess] = useState(false);
+  const [importInput, setImportInput] = useState('');
 
   const [formData, setFormData] = useState({
     date: formatLocalISO(new Date()),
@@ -135,6 +183,40 @@ const App: React.FC = () => {
     setIsSettingsOpen(false);
   };
 
+  // ระบบ Backup & Restore
+  const exportData = () => {
+    const data = {
+      records,
+      settings,
+      timestamp: Date.now(),
+      email: userEmail
+    };
+    const code = btoa(encodeURIComponent(JSON.stringify(data)));
+    setSyncCode(code);
+    navigator.clipboard.writeText(code);
+    setShowSyncSuccess(true);
+    setTimeout(() => setShowSyncSuccess(false), 3000);
+  };
+
+  const importData = () => {
+    try {
+      if (!importInput) return;
+      const decoded = JSON.parse(decodeURIComponent(atob(importInput)));
+      if (decoded.records && decoded.settings) {
+        if (window.confirm('คุณต้องการนำเข้าข้อมูลและเขียนทับข้อมูลปัจจุบันหรือไม่?')) {
+          setRecords(decoded.records);
+          setSettings(decoded.settings);
+          setImportInput('');
+          alert('นำเข้าข้อมูลสำเร็จแล้ว!');
+        }
+      } else {
+        alert('รหัสข้อมูลไม่ถูกต้อง');
+      }
+    } catch (e) {
+      alert('รหัสข้อมูลไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
+    }
+  };
+
   const getSalaryForYear = (year: string) => {
     return settings.yearlySalaries[year] || settings.baseSalary;
   };
@@ -182,6 +264,27 @@ const App: React.FC = () => {
     }
     return days;
   }, [periodRange, filteredRecords]);
+
+  const monthlySummaries = useMemo(() => {
+    const summaries: Record<string, { totalOT: number, totalHours: number, count: number }> = {};
+    
+    records.forEach(r => {
+      const cycleMonth = getCycleMonthStr(r.date);
+      if (!summaries[cycleMonth]) {
+        summaries[cycleMonth] = { totalOT: 0, totalHours: 0, count: 0 };
+      }
+      summaries[cycleMonth].totalOT += r.totalAmount;
+      summaries[cycleMonth].totalHours += r.hours;
+      summaries[cycleMonth].count += 1;
+    });
+
+    return Object.entries(summaries)
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([month, data]) => ({
+        month,
+        ...data
+      }));
+  }, [records]);
 
   const calculatedSocialSecurity = useMemo(() => {
     if (!settings.enableSocialSecurity) return 0;
@@ -245,26 +348,34 @@ const App: React.FC = () => {
 
   if (!userEmail) {
     return (
-      <div className="min-h-screen max-w-lg mx-auto bg-slate-50 flex flex-col items-center justify-center p-8">
+      <div className="min-h-screen max-w-lg mx-auto bg-[#1e293b] flex flex-col items-center justify-center p-8 overflow-hidden">
         <div className="w-full space-y-8 animate-in fade-in zoom-in duration-500">
-          <div className="flex flex-col items-center gap-4">
-             <div className="w-20 h-20 bg-blue-600 rounded-[2rem] flex items-center justify-center shadow-2xl shadow-blue-200">
-                <Clock className="w-10 h-10 text-white" />
+          <div className="flex flex-col items-center gap-6">
+             <LogoImage className="w-32 h-32 bg-[#0ea5e9]/10 rounded-[2.5rem] shadow-2xl p-1" />
+             <div className="text-center">
+                <h1 className="text-4xl font-bold text-white tracking-tight">BFC MONEY</h1>
+                <p className="text-[#0ea5e9] font-bold text-xs uppercase tracking-[0.3em] mt-2">OT & INCOME TRACKER</p>
              </div>
-             <h1 className="text-3xl font-bold text-slate-900">OT BFC</h1>
           </div>
-          <form onSubmit={handleLogin} className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100 space-y-6">
+          <form onSubmit={handleLogin} className="bg-white p-8 rounded-[2.5rem] shadow-2xl border border-white/10 space-y-6">
             <div className="space-y-2">
-               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] ml-1">เข้าใช้งานด้วย Gmail</label>
+               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] ml-1">บัญชีผู้ใช้งาน</label>
                <input 
                  type="email" required placeholder="example@gmail.com" 
-                 className="w-full bg-slate-50 border-0 p-4 rounded-2xl font-bold text-black focus:ring-2 focus:ring-blue-500 outline-none"
+                 className="w-full bg-slate-50 border-2 border-transparent p-4 rounded-2xl font-bold text-black focus:border-blue-500 focus:bg-white transition-all outline-none"
                  value={emailInput} onChange={(e) => setEmailInput(e.target.value)}
                />
             </div>
-            <button type="submit" className="w-full bg-blue-600 text-white p-5 rounded-2xl font-bold flex items-center justify-center gap-2 ios-active">
-               ถัดไป <ArrowRight className="w-5 h-5" />
+            <button type="submit" className="w-full bg-[#1e3a8a] text-white p-5 rounded-2xl font-bold flex items-center justify-center gap-2 ios-active shadow-lg shadow-blue-900/20">
+               เข้าสู่ระบบ <ArrowRight className="w-5 h-5" />
             </button>
+
+            <div className="flex items-start gap-3 bg-blue-50 p-4 rounded-2xl border border-blue-100">
+              <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-blue-700 leading-relaxed font-medium">
+                ข้อมูลของคุณจะถูกเก็บไว้ **ในเครื่องนี้เท่านั้น** เพื่อความเป็นส่วนตัว หากต้องการย้ายเครื่อง กรุณาใช้รหัสสำรองข้อมูลในหน้าตั้งค่า
+              </p>
+            </div>
           </form>
         </div>
       </div>
@@ -273,12 +384,18 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen max-w-lg mx-auto bg-slate-50 relative flex flex-col overflow-hidden">
-      <header className="sticky top-0 z-30 pt-[env(safe-area-inset-top)] bg-white/80 backdrop-blur-xl border-b border-slate-200/50 shadow-sm px-6 py-4 flex justify-between items-center">
-        <div className="flex-1 min-w-0">
-          <span className="text-[10px] font-bold text-blue-600 uppercase tracking-[0.2em] truncate block">{userEmail}</span>
-          <h1 className="text-xl font-bold text-slate-900 leading-tight">บันทึกเวลาโอที</h1>
+      <header className="sticky top-0 z-30 pt-[calc(1.5rem+env(safe-area-inset-top))] bg-white/90 backdrop-blur-xl border-b border-slate-200/50 shadow-sm px-6 pb-4 flex justify-between items-center">
+        <div className="flex-1 min-w-0 flex items-center gap-3">
+          <LogoImage className="w-8 h-8 rounded-lg" />
+          <div className="min-w-0">
+            <span className="text-[9px] font-bold text-blue-600 uppercase tracking-[0.15em] truncate block leading-none mb-1">{userEmail}</span>
+            <h1 className="text-lg font-bold text-slate-900 leading-tight">BFC MONEY</h1>
+          </div>
         </div>
         <div className="flex gap-2">
+           <button onClick={() => setViewMode('summary')} className={`p-2.5 rounded-full ios-active ${viewMode === 'summary' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              <BarChart3 className="w-5 h-5" />
+           </button>
            <button onClick={() => setViewMode(viewMode === 'list' ? 'calendar' : 'list')} className="p-2.5 bg-slate-100 rounded-full ios-active">
               {viewMode === 'list' ? <LayoutGrid className="w-5 h-5 text-slate-600" /> : <ListIcon className="w-5 h-5 text-slate-600" />}
            </button>
@@ -289,133 +406,210 @@ const App: React.FC = () => {
       </header>
 
       <main className="flex-1 px-4 py-6 space-y-6 pb-32 overflow-y-auto">
-        <div className="bg-white rounded-[2.5rem] p-7 shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between mb-6">
-            <button onClick={() => {
-              const [y, m] = currentViewMonth.split('-').map(Number);
-              const d = new Date(y, m - 2, 1);
-              setCurrentViewMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-            }} className="p-2 bg-slate-50 rounded-full ios-active"><ChevronLeft className="w-4 h-4 text-slate-500" /></button>
-            <div className="text-center">
-               <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">รอบตัดวิก (16-15)</div>
-               <div className="font-bold text-slate-900">{MONTHS_TH[parseInt(currentViewMonth.split('-')[1]) - 1]} {parseInt(currentViewMonth.split('-')[0]) + 543}</div>
-            </div>
-            <button onClick={() => {
-              const [y, m] = currentViewMonth.split('-').map(Number);
-              const d = new Date(y, m, 1);
-              setCurrentViewMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-            }} className="p-2 bg-slate-50 rounded-full ios-active"><ChevronRight className="w-4 h-4 text-slate-500" /></button>
-          </div>
+        {viewMode !== 'summary' && (
+          <>
+            <div className="bg-white rounded-[2.5rem] p-7 shadow-sm border border-slate-100">
+              <div className="flex items-center justify-between mb-6">
+                <button onClick={() => {
+                  const [y, m] = currentViewMonth.split('-').map(Number);
+                  const d = new Date(y, m - 2, 1);
+                  setCurrentViewMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+                }} className="p-2 bg-slate-50 rounded-full ios-active"><ChevronLeft className="w-4 h-4 text-slate-500" /></button>
+                <div className="text-center">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">รอบตัดวิก (16-15)</div>
+                  <div className="font-bold text-slate-900">{MONTHS_TH[parseInt(currentViewMonth.split('-')[1]) - 1]} {parseInt(currentViewMonth.split('-')[0]) + 543}</div>
+                </div>
+                <button onClick={() => {
+                  const [y, m] = currentViewMonth.split('-').map(Number);
+                  const d = new Date(y, m, 1);
+                  setCurrentViewMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+                }} className="p-2 bg-slate-50 rounded-full ios-active"><ChevronRight className="w-4 h-4 text-slate-500" /></button>
+              </div>
 
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div className="bg-slate-50 rounded-3xl p-5 text-center">
-              <span className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">โอทีรอบนี้</span>
-              <h2 className="text-xl font-bold text-slate-800">฿{monthlyStats.totalOT.toLocaleString()}</h2>
-            </div>
-            <div className="bg-blue-50 rounded-3xl p-5 text-center">
-              <span className="text-[10px] font-bold text-blue-400 uppercase mb-1 block">เงินเดือนวิกนี้</span>
-              <h2 className="text-xl font-bold text-blue-600">฿{currentViewSalary.toLocaleString()}</h2>
-            </div>
-          </div>
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className="bg-slate-50 rounded-3xl p-5 text-center border border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">โอทีรอบนี้</span>
+                  <h2 className="text-xl font-bold text-slate-800">฿{monthlyStats.totalOT.toLocaleString()}</h2>
+                </div>
+                <div className="bg-blue-50 rounded-3xl p-5 text-center border border-blue-100">
+                  <span className="text-[10px] font-bold text-blue-400 uppercase mb-1 block">เงินเดือนวิกนี้</span>
+                  <h2 className="text-xl font-bold text-blue-600">฿{currentViewSalary.toLocaleString()}</h2>
+                </div>
+              </div>
 
-          <button onClick={() => setShowBreakdown(!showBreakdown)} className="w-full bg-blue-600 text-white p-6 rounded-3xl font-bold flex flex-col items-center ios-active shadow-lg shadow-blue-100">
-             <span className="text-xs opacity-80 mb-1">ยอดสุทธิรับจริง (หักภาษี/ปปส. แล้ว)</span>
-             <span className="text-3xl font-bold">฿{monthlyStats.netSalary.toLocaleString()}</span>
-          </button>
-        </div>
+              <button onClick={() => setShowBreakdown(!showBreakdown)} className="w-full bg-[#1e3a8a] text-white p-6 rounded-3xl font-bold flex flex-col items-center ios-active shadow-xl shadow-blue-900/10 transition-all active:bg-[#1a365d]">
+                <span className="text-xs opacity-80 mb-1">ยอดสุทธิรับจริง (หักภาษี/ปปส. แล้ว)</span>
+                <span className="text-3xl font-bold">฿{monthlyStats.netSalary.toLocaleString()}</span>
+              </button>
+            </div>
 
-        {showBreakdown && (
-          <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 space-y-3 animate-in slide-in-from-top-4">
-             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b pb-2 mb-2">รายละเอียดรายรับ-รายหัก</h3>
-             <BreakdownRow label={`เงินเดือนประจำปี ${currentViewMonth.split('-')[0]}`} value={currentViewSalary} />
-             <BreakdownRow label="ค่าล่วงเวลา (OT)" value={monthlyStats.totalOT} isHighlight />
-             <BreakdownRow label="ค่าอาหาร" value={settings.foodAllowance} />
-             <BreakdownRow label="เบี้ยขยัน" value={settings.diligenceAllowance} />
-             <BreakdownRow label="ค่ากะ" value={settings.shiftAllowance} />
-             <BreakdownRow label="รายรับพิเศษ" value={settings.specialIncome} />
-             <div className="border-t pt-3 mt-1 space-y-1">
-                <BreakdownRow label="หักประกันสังคม (5%)" value={-calculatedSocialSecurity} isNegative />
-                <BreakdownRow label="หักกองทุนสำรองฯ" value={-calculatedPvdAmount} isNegative />
-             </div>
-          </div>
+            {showBreakdown && (
+              <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 space-y-3 animate-in slide-in-from-top-4">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b pb-2 mb-2">รายละเอียดรายรับ-รายหัก</h3>
+                <BreakdownRow label={`เงินเดือนประจำปี ${currentViewMonth.split('-')[0]}`} value={currentViewSalary} />
+                <BreakdownRow label="ค่าล่วงเวลา (OT)" value={monthlyStats.totalOT} isHighlight />
+                <BreakdownRow label="ค่าอาหาร" value={settings.foodAllowance} />
+                <BreakdownRow label="เบี้ยขยัน" value={settings.diligenceAllowance} />
+                <BreakdownRow label="ค่ากะ" value={settings.shiftAllowance} />
+                <BreakdownRow label="รายรับพิเศษ" value={settings.specialIncome} />
+                <div className="border-t pt-3 mt-1 space-y-1">
+                    <BreakdownRow label="หักประกันสังคม (5%)" value={-calculatedSocialSecurity} isNegative />
+                    <BreakdownRow label="หักกองทุนสำรองฯ" value={-calculatedPvdAmount} isNegative />
+                </div>
+              </div>
+            )}
+
+            {viewMode === 'list' ? (
+              <div className="space-y-3">
+                {filteredRecords.map(record => (
+                    <div key={record.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-slate-50 rounded-2xl flex flex-col items-center justify-center font-bold">
+                            <span className="text-xs">{parseLocalDate(record.date).getDate()}</span>
+                            <span className="text-[8px] text-slate-400 uppercase">{MONTHS_TH[parseLocalDate(record.date).getMonth()].substring(0,3)}</span>
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-800">{record.hours} ชม. <span className="text-[10px] text-blue-600 ml-1">x{record.type}</span></div>
+                            {record.note && <div className="text-[10px] text-slate-400">{record.note}</div>}
+                          </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                          <div className="font-bold">฿{record.totalAmount.toLocaleString()}</div>
+                          <button onClick={() => setRecords(prev => prev.filter(r => r.id !== record.id))} className="text-slate-300 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+                    </div>
+                ))}
+                {filteredRecords.length === 0 && (
+                  <div className="text-center py-12 text-slate-400 opacity-50">
+                      <CalendarDays className="w-12 h-12 mx-auto mb-2" />
+                      <p className="text-sm font-bold">ไม่มีรายการโอทีในรอบนี้</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
+                <div className="grid grid-cols-7 gap-1">
+                    {['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map(day => (
+                      <div key={day} className="text-center text-[9px] font-bold text-slate-300 py-2 uppercase">{day}</div>
+                    ))}
+                    {Array.from({ length: periodRange.startDayOfWeek }).map((_, i) => <div key={`pad-${i}`} className="aspect-square"></div>)}
+                    {calendarDays.map((item) => {
+                      const dayTotal = item.records.reduce((sum, r) => sum + r.totalAmount, 0);
+                      return (
+                          <button 
+                            key={item.dateStr} 
+                            onClick={() => {
+                              if (item.records.length > 0) {
+                                setSelectedDayInfo(item);
+                              } else {
+                                setFormData({...formData, date: item.dateStr});
+                                setIsAdding(true);
+                              }
+                            }}
+                            className={`aspect-square rounded-xl flex flex-col items-center justify-center relative border transition-all ios-active ${item.isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-50 bg-slate-50/50'}`}
+                          >
+                            <span className={`text-[10px] font-bold ${item.isToday ? 'text-blue-600' : 'text-slate-400'}`}>{item.date.getDate()}</span>
+                            {dayTotal > 0 && (
+                                <span className="text-[7px] font-bold text-blue-600 leading-tight">
+                                  ฿{dayTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                </span>
+                            )}
+                          </button>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
-        {viewMode === 'list' ? (
-          <div className="space-y-3">
-             {filteredRecords.map(record => (
-                <div key={record.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex items-center justify-between">
-                   <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-slate-50 rounded-2xl flex flex-col items-center justify-center font-bold">
-                         <span className="text-xs">{parseLocalDate(record.date).getDate()}</span>
-                         <span className="text-[8px] text-slate-400 uppercase">{MONTHS_TH[parseLocalDate(record.date).getMonth()].substring(0,3)}</span>
-                      </div>
-                      <div>
-                         <div className="font-bold text-slate-800">{record.hours} ชม. <span className="text-[10px] text-blue-600 ml-1">x{record.type}</span></div>
-                         {record.note && <div className="text-[10px] text-slate-400">{record.note}</div>}
-                      </div>
-                   </div>
-                   <div className="flex items-center gap-3">
-                      <div className="font-bold">฿{record.totalAmount.toLocaleString()}</div>
-                      <button onClick={() => setRecords(prev => prev.filter(r => r.id !== record.id))} className="text-slate-300 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
-                   </div>
-                </div>
-             ))}
-             {filteredRecords.length === 0 && (
-               <div className="text-center py-12 text-slate-400 opacity-50">
-                  <CalendarDays className="w-12 h-12 mx-auto mb-2" />
-                  <p className="text-sm font-bold">ไม่มีรายการโอทีในรอบนี้</p>
+        {viewMode === 'summary' && (
+          <div className="space-y-4">
+             <div className="flex items-center gap-3 px-2 mb-2">
+                <BarChart3 className="w-6 h-6 text-blue-600" />
+                <h2 className="text-xl font-bold text-slate-800">ประวัติรายรอบเดือน</h2>
+             </div>
+             {monthlySummaries.map((s) => {
+               const [y, m] = s.month.split('-').map(Number);
+               return (
+                <button 
+                  key={s.month} 
+                  onClick={() => { setCurrentViewMonth(s.month); setViewMode('list'); }}
+                  className="w-full bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex justify-between items-center ios-active"
+                >
+                  <div className="text-left">
+                     <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">รอบการตัดวิก</span>
+                     <h3 className="text-lg font-bold text-slate-800">{MONTHS_TH[m - 1]} {y + 543}</h3>
+                     <p className="text-xs text-slate-500">{s.count} รายการ • {s.totalHours} ชั่วโมง</p>
+                  </div>
+                  <div className="text-right">
+                     <span className="text-[10px] font-bold text-blue-400 uppercase block mb-1">ยอดรวมโอที</span>
+                     <span className="text-xl font-bold text-blue-600">฿{s.totalOT.toLocaleString()}</span>
+                  </div>
+                </button>
+               );
+             })}
+             {monthlySummaries.length === 0 && (
+               <div className="text-center py-20 text-slate-300">
+                  <History className="w-16 h-16 mx-auto mb-4 opacity-20" />
+                  <p className="font-bold">ยังไม่มีประวัติการบันทึก</p>
                </div>
              )}
-          </div>
-        ) : (
-          <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
-             <div className="grid grid-cols-7 gap-1">
-                {['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map(day => (
-                   <div key={day} className="text-center text-[9px] font-bold text-slate-300 py-2 uppercase">{day}</div>
-                ))}
-                {Array.from({ length: periodRange.startDayOfWeek }).map((_, i) => <div key={`pad-${i}`} className="aspect-square"></div>)}
-                {calendarDays.map((item) => {
-                   const dayTotal = item.records.reduce((sum, r) => sum + r.totalAmount, 0);
-                   return (
-                      <button 
-                        key={item.dateStr} 
-                        onClick={() => {
-                          if (item.records.length > 0) {
-                            setSelectedDayInfo(item);
-                          } else {
-                            setFormData({...formData, date: item.dateStr});
-                            setIsAdding(true);
-                          }
-                        }}
-                        className={`aspect-square rounded-xl flex flex-col items-center justify-center relative border transition-all ios-active ${item.isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-50 bg-slate-50/50'}`}
-                      >
-                         <span className={`text-[10px] font-bold ${item.isToday ? 'text-blue-600' : 'text-slate-400'}`}>{item.date.getDate()}</span>
-                         {dayTotal > 0 && (
-                            <span className="text-[7px] font-bold text-blue-600 leading-tight">
-                               ฿{dayTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                            </span>
-                         )}
-                      </button>
-                   );
-                })}
-             </div>
           </div>
         )}
       </main>
 
       <div className="fixed bottom-10 left-0 right-0 flex justify-center pointer-events-none">
-         <button onClick={() => setIsAdding(true)} className="bg-blue-600 text-white w-16 h-16 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto ios-active">
+         <button onClick={() => setIsAdding(true)} className="bg-[#1e3a8a] text-white w-16 h-16 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto ios-active">
             <Plus className="w-8 h-8" />
          </button>
       </div>
 
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right">
-           <header className="px-6 py-6 bg-white border-b flex justify-between items-center pt-[calc(1.5rem+env(safe-area-inset-top))]">
+           <header className="px-6 py-6 bg-white border-b flex justify-between items-center pt-[calc(2rem+env(safe-area-inset-top))] pb-4 shadow-sm">
               <h3 className="text-xl font-bold">การตั้งค่า</h3>
               <button onClick={() => setIsSettingsOpen(false)} className="text-blue-600 font-bold px-4 py-2 bg-blue-50 rounded-2xl">เสร็จสิ้น</button>
            </header>
            <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-32">
+              
+              <SettingSection title="สำรองและย้ายข้อมูล (Sync)">
+                 <div className="p-6 space-y-4">
+                    <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
+                      หากคุณต้องการเปลี่ยนโทรศัพท์ ให้กดปุ่ม **"คัดลอกรหัสสำรองข้อมูล"** แล้วนำไปวางในช่อง **"นำเข้าข้อมูล"** ที่เครื่องใหม่ ข้อมูลจะถูกโอนไปทันที
+                    </p>
+                    <div className="flex flex-col gap-3">
+                       <button 
+                         onClick={exportData}
+                         className="flex items-center justify-center gap-2 bg-blue-50 text-blue-600 p-4 rounded-2xl font-bold ios-active border border-blue-100"
+                       >
+                         {showSyncSuccess ? <CheckCircle2 className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
+                         {showSyncSuccess ? 'คัดลอกสำเร็จ!' : 'คัดลอกรหัสสำรองข้อมูล'}
+                       </button>
+
+                       <div className="space-y-2 pt-2 border-t">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase">นำเข้าจากเครื่องอื่น</label>
+                          <div className="flex gap-2">
+                             <input 
+                               type="text" 
+                               placeholder="วางรหัสสำรองข้อมูลที่นี่..." 
+                               value={importInput}
+                               onChange={(e) => setImportInput(e.target.value)}
+                               className="flex-1 bg-slate-50 p-3 rounded-xl text-xs font-normal border border-slate-100"
+                             />
+                             <button 
+                               onClick={importData}
+                               disabled={!importInput}
+                               className={`p-3 rounded-xl text-white ios-active ${importInput ? 'bg-blue-600' : 'bg-slate-300'}`}
+                             >
+                               <Upload className="w-5 h-5" />
+                             </button>
+                          </div>
+                       </div>
+                    </div>
+                 </div>
+              </SettingSection>
+
               <SettingSection title="เงินเดือนแยกตามปี">
                  <div className="p-6 space-y-4">
                     <div className="flex gap-2">

@@ -1,5 +1,5 @@
 {
-  "name": "OT BFC ",
-  "description": "A comprehensive overtime tracking and salary summary application that helps employees calculate their OT earnings and monthly income based on different rate types (1x, 1.5x, 2x, 3x).",
+  "name": "BFC MONEY",
+  "description": "แอปพลิเคชันบันทึกชั่วโมงทำงานและคำนวณรายได้โอทีที่ครอบคลุม ช่วยให้พนักงานคำนวณรายได้จากการทำงานล่วงเวลาและสรุปรายได้รายเดือนได้อย่างแม่นยำ",
   "requestFramePermissions": []
 }

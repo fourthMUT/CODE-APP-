@@ -1,0 +1,23 @@
+
+{
+  "name": "BFC MONEY Tracker",
+  "short_name": "BFC MONEY",
+  "description": "จัดการชั่วโมงทำงานและสรุปรายได้โอทีของคุณ",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#1e3a8a",
+  "theme_color": "#1e3a8a",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,12 +1,15 @@
+
 <!DOCTYPE html>
 <html lang="th">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>OT BFC - บันทึกโอที</title>
-    <link rel="manifest" href="/manifest.json">
-    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3135/3135706.png">
-    <meta name="theme-color" content="#2563eb">
+    <title>BFC MONEY - บันทึกโอที</title>
+    <!-- เปลี่ยนเส้นทาง manifest ให้เป็นที่ root -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="apple-touch-icon" href="logo.png">
+    <meta name="theme-color" content="#1a365d">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
@@ -20,7 +23,6 @@
         }
         #root { height: 100vh; display: flex; flex-direction: column; }
         
-        /* บังคับสีตัวหนังสือในช่องกรอกให้เป็นสีดำเข้มที่สุด */
         input, select, textarea { 
             font-size: 16px !important; 
             color: #000000 !important; 
@@ -38,6 +40,10 @@
 
         .ios-active:active { transform: scale(0.96); opacity: 0.8; transition: 0.1s; }
         ::-webkit-scrollbar { display: none; }
+
+        .logo-gradient {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e293b 100%);
+        }
     </style>
 <script type="importmap">
 {

@@ -1,15 +1,16 @@
+
 {
-  "name": "OT BFC Tracker",
-  "short_name": "OT BFC",
+  "name": "BFC MONEY Tracker",
+  "short_name": "BFC MONEY",
   "description": "จัดการชั่วโมงทำงานและสรุปรายได้โอทีของคุณ",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f8fafc",
-  "theme_color": "#2563eb",
+  "background_color": "#1e3a8a",
+  "theme_color": "#1e3a8a",
   "orientation": "portrait",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/3135/3135706.png",
+      "src": "https://raw.githubusercontent.com/t-tonn/image-storage/main/bfc-money-logo.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
