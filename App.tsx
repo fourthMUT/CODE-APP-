@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   Plus, 
   Settings as SettingsIcon, 
@@ -32,13 +32,15 @@ import {
   Cloud,
   CloudOff,
   CloudDownload,
-  CloudUpload
+  CloudUpload,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { OTRecord, UserSettings, OTType } from './types.ts';
 import { OT_TYPES, DEFAULT_SETTINGS, MONTHS_TH } from './constants.ts';
 
-// คีย์สำหรับ Cloud Storage (ใช้ชื่อแอปเพื่อแยก namespace)
-const CLOUD_BUCKET = 'bfc_money_v2_storage';
+// ใช้ Bucket ID ที่มีความเสถียรและรองรับ Public CORS
+const CLOUD_BUCKET_ID = 'bfc_storage_v3_stable'; 
 
 const formatLocalISO = (date: Date) => {
   const y = date.getFullYear();
@@ -135,7 +137,9 @@ const App: React.FC = () => {
   const [selectedDayInfo, setSelectedDayInfo] = useState<{ dateStr: string, records: OTRecord[] } | null>(null);
 
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
+  const retryCount = useRef(0);
 
   const [formData, setFormData] = useState({
     date: formatLocalISO(new Date()),
@@ -147,46 +151,71 @@ const App: React.FC = () => {
   const [newYearInput, setNewYearInput] = useState(new Date().getFullYear().toString());
   const [newSalaryInput, setNewSalaryInput] = useState('0');
 
-  // ฟังก์ชัน Cloud Sync - บันทึก
+  // ฟังก์ชันสร้าง Storage Key ที่ปลอดภัย
+  const getSafeKey = (email: string) => {
+    return btoa(email.toLowerCase().trim()).replace(/[^a-zA-Z0-9]/g, '');
+  };
+
+  // ฟังก์ชัน Cloud Sync - บันทึก (ปรับปรุงใหม่)
   const saveToCloud = useCallback(async (dataToSave: { records: OTRecord[], settings: UserSettings }) => {
     if (!userEmail) return;
     setSyncStatus('syncing');
+    
     try {
-      const emailKey = btoa(userEmail).replace(/=/g, ''); // สร้าง key ที่ปลอดภัยจาก email
-      const response = await fetch(`https://kvdb.io/${CLOUD_BUCKET}/${emailKey}`, {
+      const emailKey = getSafeKey(userEmail);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+      const response = await fetch(`https://kvdb.io/${CLOUD_BUCKET_ID}/${emailKey}`, {
         method: 'POST',
-        body: JSON.stringify(dataToSave)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...dataToSave, lastUpdated: new Date().toISOString() }),
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
+
       if (response.ok) {
         setSyncStatus('success');
-        setTimeout(() => setSyncStatus('idle'), 2000);
+        setLastSyncTime(new Date().toLocaleTimeString('th-TH'));
+        retryCount.current = 0;
+        setTimeout(() => setSyncStatus('idle'), 3000);
       } else {
-        setSyncStatus('error');
+        throw new Error('Server returned error');
       }
     } catch (e) {
+      console.error('Sync Error:', e);
       setSyncStatus('error');
+      // พยายาม Retry อัตโนมัติสูงสุด 3 ครั้ง
+      if (retryCount.current < 3) {
+        retryCount.current += 1;
+        setTimeout(() => saveToCloud(dataToSave), 5000);
+      }
     }
   }, [userEmail]);
 
-  // ฟังก์ชัน Cloud Sync - ดึงข้อมูล
+  // ฟังก์ชัน Cloud Sync - ดึงข้อมูล (ปรับปรุงใหม่)
   const loadFromCloud = useCallback(async (email: string) => {
     setSyncStatus('syncing');
     try {
-      const emailKey = btoa(email).replace(/=/g, '');
-      const response = await fetch(`https://kvdb.io/${CLOUD_BUCKET}/${emailKey}`);
+      const emailKey = getSafeKey(email);
+      const response = await fetch(`https://kvdb.io/${CLOUD_BUCKET_ID}/${emailKey}`);
+      
       if (response.ok) {
         const data = await response.json();
         if (data && data.records) {
           setRecords(data.records);
           setSettings(data.settings);
           setSyncStatus('success');
-          setTimeout(() => setSyncStatus('idle'), 2000);
+          setLastSyncTime(new Date().toLocaleTimeString('th-TH'));
+          setTimeout(() => setSyncStatus('idle'), 3000);
           return true;
         }
       }
       setSyncStatus('idle');
       return false;
     } catch (e) {
+      console.error('Load Error:', e);
       setSyncStatus('error');
       return false;
     }
@@ -196,18 +225,12 @@ const App: React.FC = () => {
   useEffect(() => {
     if (userEmail) {
       const init = async () => {
-        // ลองโหลดจาก Cloud ก่อน
         const success = await loadFromCloud(userEmail);
-        
-        // ถ้าโหลดจาก Cloud ไม่ได้ ให้เอาจาก Local
         if (!success) {
           const savedRecords = localStorage.getItem(`ot_records_${userEmail}`);
           const savedSettings = localStorage.getItem(`user_settings_${userEmail}`);
           if (savedRecords) setRecords(JSON.parse(savedRecords));
-          if (savedSettings) {
-            const parsedSettings = JSON.parse(savedSettings);
-            setSettings({ ...DEFAULT_SETTINGS, ...parsedSettings });
-          }
+          if (savedSettings) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) });
         }
         setIsFirstLoad(false);
       };
@@ -215,16 +238,15 @@ const App: React.FC = () => {
     }
   }, [userEmail, loadFromCloud]);
 
-  // บันทึกลง Local และ Cloud เมื่อมีการเปลี่ยนแปลง
+  // บันทึกลง Local และ Cloud
   useEffect(() => {
     if (userEmail && !isFirstLoad) {
       localStorage.setItem(`ot_records_${userEmail}`, JSON.stringify(records));
       localStorage.setItem(`user_settings_${userEmail}`, JSON.stringify(settings));
       
-      // หน่วงเวลาบันทึก Cloud เพื่อไม่ให้ยิง API ถี่เกินไป
       const timer = setTimeout(() => {
         saveToCloud({ records, settings });
-      }, 1500);
+      }, 2000); // เพิ่มหน่วงเวลาเป็น 2 วิ เพื่อลดภาระเซิร์ฟเวอร์
       
       return () => clearTimeout(timer);
     }
@@ -236,7 +258,6 @@ const App: React.FC = () => {
       const email = emailInput.toLowerCase().trim();
       localStorage.setItem('ot_bfc_user_email', email);
       setUserEmail(email);
-      // ข้อมูลจะถูกดึงอัตโนมัติจาก useEffect ด้านบน
     }
   };
 
@@ -408,7 +429,7 @@ const App: React.FC = () => {
             <div className="flex items-start gap-3 bg-blue-50 p-4 rounded-2xl border border-blue-100">
               <Cloud className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
               <p className="text-[11px] text-blue-700 leading-relaxed font-medium">
-                ล็อกอินด้วย Email เดิมเพื่อดึงข้อมูลจาก Cloud อัตโนมัติ ข้อมูลจะลิงก์กันแบบเรียลไทม์ทุกอุปกรณ์
+                ใช้เมลเดิมเพื่อดึงข้อมูลอัตโนมัติ ข้อมูลจะลิงก์กันแบบเรียลไทม์ทุกอุปกรณ์ที่คุณล็อกอิน
               </p>
             </div>
           </form>
@@ -427,7 +448,7 @@ const App: React.FC = () => {
               <span className="text-[9px] font-bold text-blue-600 uppercase tracking-[0.15em] truncate block leading-none">{userEmail}</span>
               {syncStatus === 'syncing' ? <RefreshCw className="w-2.5 h-2.5 text-blue-400 animate-spin" /> : 
                syncStatus === 'success' ? <CheckCircle2 className="w-2.5 h-2.5 text-green-500" /> : 
-               syncStatus === 'error' ? <CloudOff className="w-2.5 h-2.5 text-red-400" /> : 
+               syncStatus === 'error' ? <CloudOff className="w-2.5 h-2.5 text-red-500" /> : 
                <Cloud className="w-2.5 h-2.5 text-slate-300" />}
             </div>
             <h1 className="text-lg font-bold text-slate-900 leading-tight">BFC MONEY</h1>
@@ -445,6 +466,16 @@ const App: React.FC = () => {
            </button>
         </div>
       </header>
+
+      {syncStatus === 'error' && (
+        <div className="bg-red-500 text-white text-[10px] font-bold py-1 px-4 flex items-center justify-between animate-in slide-in-from-top">
+          <div className="flex items-center gap-2">
+            <CloudOff className="w-3 h-3" />
+            <span>การเชื่อมต่อ Cloud มีปัญหา ข้อมูลจะถูกเก็บไว้ในเครื่องก่อน</span>
+          </div>
+          <button onClick={() => saveToCloud({records, settings})} className="underline">ลองใหม่</button>
+        </div>
+      )}
 
       <main className="flex-1 px-4 py-6 space-y-6 pb-32 overflow-y-auto">
         {viewMode !== 'summary' && (
@@ -614,24 +645,27 @@ const App: React.FC = () => {
            </header>
            <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-32">
               
-              <SettingSection title="Cloud Sync (เรียลไทม์)">
+              <SettingSection title="Cloud Sync Status">
                  <div className="p-6 space-y-4">
                     <div className="flex items-center gap-3">
                        <div className={`p-3 rounded-2xl ${syncStatus === 'error' ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
-                          {syncStatus === 'syncing' ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Cloud className="w-6 h-6" />}
+                          {syncStatus === 'syncing' ? <RefreshCw className="w-6 h-6 animate-spin" /> : 
+                           syncStatus === 'error' ? <CloudOff className="w-6 h-6" /> : <Cloud className="w-6 h-6" />}
                        </div>
                        <div>
-                          <h4 className="font-bold text-slate-800">ระบบซิงค์ข้อมูลอัตโนมัติ</h4>
-                          <p className="text-[10px] text-slate-500">สถานะ: {syncStatus === 'syncing' ? 'กำลังบันทึก...' : 
-                                                                     syncStatus === 'success' ? 'บันทึกข้อมูลล่าสุดแล้ว' : 
-                                                                     syncStatus === 'error' ? 'การเชื่อมต่อผิดพลาด' : 'พร้อมใช้งาน'}</p>
+                          <h4 className="font-bold text-slate-800">สำรองข้อมูลอัตโนมัติ</h4>
+                          <p className="text-[10px] text-slate-500">
+                            {syncStatus === 'syncing' ? 'กำลังส่งข้อมูล...' : 
+                             syncStatus === 'error' ? 'การเชื่อมต่อผิดพลาด (เก็บในเครื่องชั่วคราว)' : 
+                             `อัปเดตล่าสุด: ${lastSyncTime || 'เพิ่งเริ่มใช้งาน'}`}
+                          </p>
                        </div>
                     </div>
                     <button 
                       onClick={() => loadFromCloud(userEmail!)}
                       className="w-full flex items-center justify-center gap-2 bg-blue-50 text-blue-600 p-4 rounded-2xl font-bold ios-active border border-blue-100"
                     >
-                      <RefreshCw className="w-4 h-4" /> ดึงข้อมูลจาก Cloud ตอนนี้
+                      <RefreshCw className="w-4 h-4" /> ดึงข้อมูลใหม่จาก Cloud
                     </button>
                  </div>
               </SettingSection>
