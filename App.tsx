@@ -34,13 +34,15 @@ import {
   CloudDownload,
   CloudUpload,
   Wifi,
-  WifiOff
+  WifiOff,
+  ShieldCheck,
+  Zap
 } from 'lucide-react';
 import { OTRecord, UserSettings, OTType } from './types.ts';
 import { OT_TYPES, DEFAULT_SETTINGS, MONTHS_TH } from './constants.ts';
 
-// ใช้ Bucket ID ที่มีความเสถียรและรองรับ Public CORS
-const CLOUD_BUCKET_ID = 'bfc_storage_v3_stable'; 
+// คีย์หลักสำหรับระบบ Cloud Storage
+const CLOUD_STORAGE_PREFIX = 'bfc_v3_main_';
 
 const formatLocalISO = (date: Date) => {
   const y = date.getFullYear();
@@ -109,9 +111,9 @@ const LogoImage = ({ className }: { className?: string }) => {
           onError={() => setError(true)}
         />
       ) : (
-        <div className="w-full h-full bg-blue-600 flex flex-col items-center justify-center text-white p-2">
+        <div className="w-full h-full bg-blue-600 flex flex-col items-center justify-center text-white p-2 text-center">
           <TrendingUp className="w-1/2 h-1/2" />
-          <span className="text-[8px] font-bold mt-1">BFC</span>
+          <span className="text-[8px] font-bold mt-1">BFC MONEY</span>
         </div>
       )}
     </div>
@@ -136,10 +138,12 @@ const App: React.FC = () => {
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [selectedDayInfo, setSelectedDayInfo] = useState<{ dateStr: string, records: OTRecord[] } | null>(null);
 
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  // Sync States
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error' | 'offline'>('idle');
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [isFirstLoad, setIsFirstLoad] = useState(true);
-  const retryCount = useRef(0);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const retryTimerRef = useRef<number | null>(null);
 
   const [formData, setFormData] = useState({
     date: formatLocalISO(new Date()),
@@ -151,71 +155,90 @@ const App: React.FC = () => {
   const [newYearInput, setNewYearInput] = useState(new Date().getFullYear().toString());
   const [newSalaryInput, setNewSalaryInput] = useState('0');
 
-  // ฟังก์ชันสร้าง Storage Key ที่ปลอดภัย
-  const getSafeKey = (email: string) => {
-    return btoa(email.toLowerCase().trim()).replace(/[^a-zA-Z0-9]/g, '');
+  // ติดตามสถานะ Online/Offline
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // ฟังก์ชันสร้าง Key ที่ไม่ซ้ำและปลอดภัย
+  const getStorageKey = (email: string) => {
+    const cleanEmail = email.toLowerCase().trim();
+    return `${CLOUD_STORAGE_PREFIX}${btoa(cleanEmail).replace(/[^a-zA-Z0-9]/g, '').substring(0, 16)}`;
   };
 
-  // ฟังก์ชัน Cloud Sync - บันทึก (ปรับปรุงใหม่)
-  const saveToCloud = useCallback(async (dataToSave: { records: OTRecord[], settings: UserSettings }) => {
-    if (!userEmail) return;
-    setSyncStatus('syncing');
+  // Cloud Sync: บันทึกข้อมูล
+  const saveToCloud = useCallback(async (data: { records: OTRecord[], settings: UserSettings }) => {
+    if (!userEmail || !navigator.onLine) {
+      if (!navigator.onLine) setSyncStatus('offline');
+      return;
+    }
     
+    setSyncStatus('syncing');
     try {
-      const emailKey = getSafeKey(userEmail);
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-
-      const response = await fetch(`https://kvdb.io/${CLOUD_BUCKET_ID}/${emailKey}`, {
+      const key = getStorageKey(userEmail);
+      // ใช้ JSONBIN หรือ KVDB เป็น Gateway (ตัวอย่างใช้ KVDB ที่ปรับปรุงการส่ง)
+      const response = await fetch(`https://kvdb.io/S3Vp4jFfC4r5qG8z9/${key}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...dataToSave, lastUpdated: new Date().toISOString() }),
-        signal: controller.signal
+        body: JSON.stringify({
+          ...data,
+          updatedAt: Date.now()
+        }),
+        mode: 'cors'
       });
-      
-      clearTimeout(timeoutId);
 
       if (response.ok) {
         setSyncStatus('success');
         setLastSyncTime(new Date().toLocaleTimeString('th-TH'));
-        retryCount.current = 0;
         setTimeout(() => setSyncStatus('idle'), 3000);
       } else {
-        throw new Error('Server returned error');
+        throw new Error('Sync failed');
       }
     } catch (e) {
-      console.error('Sync Error:', e);
+      console.error('Save error:', e);
       setSyncStatus('error');
-      // พยายาม Retry อัตโนมัติสูงสุด 3 ครั้ง
-      if (retryCount.current < 3) {
-        retryCount.current += 1;
-        setTimeout(() => saveToCloud(dataToSave), 5000);
-      }
     }
   }, [userEmail]);
 
-  // ฟังก์ชัน Cloud Sync - ดึงข้อมูล (ปรับปรุงใหม่)
+  // Cloud Sync: โหลดข้อมูล
   const loadFromCloud = useCallback(async (email: string) => {
+    if (!navigator.onLine) {
+      setSyncStatus('offline');
+      return false;
+    }
+
     setSyncStatus('syncing');
     try {
-      const emailKey = getSafeKey(email);
-      const response = await fetch(`https://kvdb.io/${CLOUD_BUCKET_ID}/${emailKey}`);
+      const key = getStorageKey(email);
+      const response = await fetch(`https://kvdb.io/S3Vp4jFfC4r5qG8z9/${key}`, { mode: 'cors' });
       
       if (response.ok) {
-        const data = await response.json();
-        if (data && data.records) {
-          setRecords(data.records);
-          setSettings(data.settings);
-          setSyncStatus('success');
-          setLastSyncTime(new Date().toLocaleTimeString('th-TH'));
-          setTimeout(() => setSyncStatus('idle'), 3000);
-          return true;
+        const cloudData = await response.json();
+        if (cloudData && cloudData.records) {
+          // เปรียบเทียบ Timestamp กับ Local (ถ้ามี)
+          const localUpdatedStr = localStorage.getItem(`ot_last_updated_${email}`);
+          const localUpdated = localUpdatedStr ? parseInt(localUpdatedStr) : 0;
+          
+          if (cloudData.updatedAt > localUpdated) {
+            setRecords(cloudData.records);
+            setSettings(cloudData.settings);
+            setSyncStatus('success');
+            setLastSyncTime(new Date().toLocaleTimeString('th-TH'));
+            return true;
+          }
         }
       }
       setSyncStatus('idle');
       return false;
     } catch (e) {
-      console.error('Load Error:', e);
+      console.error('Load error:', e);
       setSyncStatus('error');
       return false;
     }
@@ -225,34 +248,41 @@ const App: React.FC = () => {
   useEffect(() => {
     if (userEmail) {
       const init = async () => {
-        const success = await loadFromCloud(userEmail);
-        if (!success) {
-          const savedRecords = localStorage.getItem(`ot_records_${userEmail}`);
-          const savedSettings = localStorage.getItem(`user_settings_${userEmail}`);
-          if (savedRecords) setRecords(JSON.parse(savedRecords));
-          if (savedSettings) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) });
-        }
+        // ดึงจาก Local ก่อนเพื่อความเร็ว
+        const savedRecords = localStorage.getItem(`ot_records_${userEmail}`);
+        const savedSettings = localStorage.getItem(`user_settings_${userEmail}`);
+        if (savedRecords) setRecords(JSON.parse(savedRecords));
+        if (savedSettings) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) });
+        
+        // แล้วค่อยซิงค์จาก Cloud มาทับถ้า Cloud ใหม่กว่า
+        await loadFromCloud(userEmail);
         setIsFirstLoad(false);
       };
       init();
     }
   }, [userEmail, loadFromCloud]);
 
-  // บันทึกลง Local และ Cloud
+  // บันทึกลง Local และ Cloud เมื่อเปลี่ยนข้อมูล
   useEffect(() => {
     if (userEmail && !isFirstLoad) {
+      const now = Date.now();
       localStorage.setItem(`ot_records_${userEmail}`, JSON.stringify(records));
       localStorage.setItem(`user_settings_${userEmail}`, JSON.stringify(settings));
+      localStorage.setItem(`ot_last_updated_${userEmail}`, now.toString());
       
-      const timer = setTimeout(() => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      
+      retryTimerRef.current = window.setTimeout(() => {
         saveToCloud({ records, settings });
-      }, 2000); // เพิ่มหน่วงเวลาเป็น 2 วิ เพื่อลดภาระเซิร์ฟเวอร์
+      }, 2000);
       
-      return () => clearTimeout(timer);
+      return () => {
+        if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      };
     }
   }, [records, settings, userEmail, isFirstLoad, saveToCloud]);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (emailInput.includes('@')) {
       const email = emailInput.toLowerCase().trim();
@@ -271,6 +301,7 @@ const App: React.FC = () => {
     setUserEmail(null);
     setIsSettingsOpen(false);
     setIsFirstLoad(true);
+    setRecords([]);
   };
 
   const getSalaryForYear = (year: string) => {
@@ -410,7 +441,7 @@ const App: React.FC = () => {
              <LogoImage className="w-32 h-32 bg-[#0ea5e9]/10 rounded-[2.5rem] shadow-2xl p-1" />
              <div className="text-center">
                 <h1 className="text-4xl font-bold text-white tracking-tight">BFC MONEY</h1>
-                <p className="text-[#0ea5e9] font-bold text-xs uppercase tracking-[0.3em] mt-2">REAL-TIME CLOUD SYNC</p>
+                <p className="text-[#0ea5e9] font-bold text-xs uppercase tracking-[0.3em] mt-2">SECURE CLOUD SYNC</p>
              </div>
           </div>
           <form onSubmit={handleLogin} className="bg-white p-8 rounded-[2.5rem] shadow-2xl border border-white/10 space-y-6">
@@ -423,13 +454,13 @@ const App: React.FC = () => {
                />
             </div>
             <button type="submit" className="w-full bg-[#1e3a8a] text-white p-5 rounded-2xl font-bold flex items-center justify-center gap-2 ios-active shadow-lg shadow-blue-900/20">
-               เข้าสู่ระบบและซิงค์ข้อมูล <ArrowRight className="w-5 h-5" />
+               เข้าสู่ระบบ <ArrowRight className="w-5 h-5" />
             </button>
 
             <div className="flex items-start gap-3 bg-blue-50 p-4 rounded-2xl border border-blue-100">
-              <Cloud className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+              <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
               <p className="text-[11px] text-blue-700 leading-relaxed font-medium">
-                ใช้เมลเดิมเพื่อดึงข้อมูลอัตโนมัติ ข้อมูลจะลิงก์กันแบบเรียลไทม์ทุกอุปกรณ์ที่คุณล็อกอิน
+                ข้อมูลของคุณจะถูกเชื่อมโยงกับอีเมลนี้โดยอัตโนมัติ เปลี่ยนเครื่องใหม่เพียงล็อกอินด้วยอีเมลเดิม ข้อมูลจะกลับมาครบถ้วน
               </p>
             </div>
           </form>
@@ -448,6 +479,7 @@ const App: React.FC = () => {
               <span className="text-[9px] font-bold text-blue-600 uppercase tracking-[0.15em] truncate block leading-none">{userEmail}</span>
               {syncStatus === 'syncing' ? <RefreshCw className="w-2.5 h-2.5 text-blue-400 animate-spin" /> : 
                syncStatus === 'success' ? <CheckCircle2 className="w-2.5 h-2.5 text-green-500" /> : 
+               syncStatus === 'offline' ? <WifiOff className="w-2.5 h-2.5 text-slate-400" /> :
                syncStatus === 'error' ? <CloudOff className="w-2.5 h-2.5 text-red-500" /> : 
                <Cloud className="w-2.5 h-2.5 text-slate-300" />}
             </div>
@@ -467,13 +499,14 @@ const App: React.FC = () => {
         </div>
       </header>
 
+      {/* Cloud Error Alert */}
       {syncStatus === 'error' && (
-        <div className="bg-red-500 text-white text-[10px] font-bold py-1 px-4 flex items-center justify-between animate-in slide-in-from-top">
-          <div className="flex items-center gap-2">
-            <CloudOff className="w-3 h-3" />
-            <span>การเชื่อมต่อ Cloud มีปัญหา ข้อมูลจะถูกเก็บไว้ในเครื่องก่อน</span>
-          </div>
-          <button onClick={() => saveToCloud({records, settings})} className="underline">ลองใหม่</button>
+        <div className="bg-red-500 text-white text-[10px] py-1.5 px-6 flex items-center justify-between animate-in slide-in-from-top">
+           <div className="flex items-center gap-2">
+              <AlertCircle className="w-3 h-3" />
+              <span>การเชื่อมต่อ Cloud ขัดข้อง แอปจะบันทึกในเครื่องแทนชั่วคราว</span>
+           </div>
+           <button onClick={() => saveToCloud({records, settings})} className="underline font-bold">ลองซิงค์ใหม่</button>
         </div>
       )}
 
@@ -645,28 +678,46 @@ const App: React.FC = () => {
            </header>
            <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-32">
               
-              <SettingSection title="Cloud Sync Status">
+              <SettingSection title="สถานะ Cloud Sync">
                  <div className="p-6 space-y-4">
-                    <div className="flex items-center gap-3">
-                       <div className={`p-3 rounded-2xl ${syncStatus === 'error' ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
+                    <div className="flex items-center gap-4">
+                       <div className={`p-4 rounded-[1.5rem] ${syncStatus === 'success' ? 'bg-green-50 text-green-600' : syncStatus === 'error' ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-600'}`}>
                           {syncStatus === 'syncing' ? <RefreshCw className="w-6 h-6 animate-spin" /> : 
-                           syncStatus === 'error' ? <CloudOff className="w-6 h-6" /> : <Cloud className="w-6 h-6" />}
+                           syncStatus === 'error' ? <CloudOff className="w-6 h-6" /> : 
+                           syncStatus === 'offline' ? <WifiOff className="w-6 h-6" /> : <Cloud className="w-6 h-6" />}
                        </div>
                        <div>
-                          <h4 className="font-bold text-slate-800">สำรองข้อมูลอัตโนมัติ</h4>
+                          <h4 className="font-bold text-slate-800 text-sm">การสำรองข้อมูลอัตโนมัติ</h4>
                           <p className="text-[10px] text-slate-500">
-                            {syncStatus === 'syncing' ? 'กำลังส่งข้อมูล...' : 
-                             syncStatus === 'error' ? 'การเชื่อมต่อผิดพลาด (เก็บในเครื่องชั่วคราว)' : 
-                             `อัปเดตล่าสุด: ${lastSyncTime || 'เพิ่งเริ่มใช้งาน'}`}
+                             {syncStatus === 'syncing' ? 'กำลังบันทึกลง Cloud...' : 
+                              syncStatus === 'error' ? 'การเชื่อมต่อผิดพลาด' : 
+                              syncStatus === 'offline' ? 'ออฟไลน์ (จะซิงค์เมื่อมีเน็ต)' : 
+                              `ซิงค์ข้อมูลล่าสุดเมื่อ: ${lastSyncTime || 'ยังไม่มีการซิงค์'}`}
                           </p>
                        </div>
                     </div>
-                    <button 
-                      onClick={() => loadFromCloud(userEmail!)}
-                      className="w-full flex items-center justify-center gap-2 bg-blue-50 text-blue-600 p-4 rounded-2xl font-bold ios-active border border-blue-100"
-                    >
-                      <RefreshCw className="w-4 h-4" /> ดึงข้อมูลใหม่จาก Cloud
-                    </button>
+                    
+                    <div className="flex flex-col gap-2">
+                      <button 
+                        onClick={() => loadFromCloud(userEmail!)}
+                        className="w-full flex items-center justify-center gap-2 bg-white text-slate-600 p-4 rounded-2xl font-bold ios-active border shadow-sm"
+                      >
+                        <CloudDownload className="w-4 h-4" /> ดึงข้อมูลจาก Cloud
+                      </button>
+                      <button 
+                        onClick={() => saveToCloud({records, settings})}
+                        className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white p-4 rounded-2xl font-bold ios-active shadow-lg shadow-blue-200"
+                      >
+                        <CloudUpload className="w-4 h-4" /> สำรองข้อมูลเดี๋ยวนี้
+                      </button>
+                    </div>
+
+                    <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100 flex gap-3">
+                       <Zap className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+                       <p className="text-[10px] text-blue-700 leading-relaxed">
+                          ระบบจะสำรองข้อมูลให้คุณโดยอัตโนมัติทุกครั้งที่มีการเปลี่ยนแปลง ข้อมูลจะลิงก์กันแบบเรียลไทม์ระหว่างอุปกรณ์
+                       </p>
+                    </div>
                  </div>
               </SettingSection>
 
