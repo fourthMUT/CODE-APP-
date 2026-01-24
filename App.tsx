@@ -141,8 +141,6 @@ const App: React.FC = () => {
   const getMonthlyWelfare = useCallback((monthStr: string): MonthlyAdjustment => {
     const adj = settings.monthlyAdjustments?.[monthStr];
     if (adj) return { ...adj };
-    
-    // หากไม่มีการตั้งค่าเดือนนั้น ให้ใช้ค่าจาก Global เป็นค่าเริ่มต้น
     return {
       baseSalary: undefined,
       workingDaysPerMonth: settings.workingDaysPerMonth,
@@ -164,7 +162,7 @@ const App: React.FC = () => {
     return settings.yearlySalaries[yearStr] || settings.baseSalary;
   }, [settings]);
 
-  // คำนวณค่าโอทีโดยดึง วันทำงาน/ชม.ทำงาน จาก Monthly Adjustment ของเดือนนั้นๆ
+  // คำนวณค่าโอที
   const calculateOTAmount = useCallback((record: OTRecord, salary: number, monthStr: string) => {
     const welfare = getMonthlyWelfare(monthStr);
     const hRate = salary / (welfare.workingDaysPerMonth * welfare.workingHoursPerDay);
@@ -243,15 +241,6 @@ const App: React.FC = () => {
       return () => { if (syncTimeoutRef.current) window.clearTimeout(syncTimeoutRef.current); };
     }
   }, [records, settings, userEmail, isSyncReady, handlePushData]);
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (emailInput.includes('@')) {
-      const email = emailInput.toLowerCase().trim();
-      localStorage.setItem('ot_bfc_user_email', email);
-      setUserEmail(email);
-    }
-  };
 
   const handleLogoutAction = () => {
     if (!logoutConfirm) { setLogoutConfirm(true); setTimeout(() => setLogoutConfirm(false), 5000); return; }
@@ -425,25 +414,40 @@ const App: React.FC = () => {
               </div>
             )}
 
-            <div className="space-y-3">
-              {filteredRecords.map(record => {
-                const cycleMonthOfRecord = getCycleMonthStr(record.date);
-                const salaryForRecord = getEffectiveSalary(cycleMonthOfRecord);
-                const amount = calculateOTAmount(record, salaryForRecord, cycleMonthOfRecord);
-                return (
-                  <div key={record.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-slate-50 rounded-2xl flex flex-col items-center justify-center font-bold">
-                          <span className="text-xs">{parseLocalDate(record.date).getDate()}</span>
-                          <span className="text-[8px] text-slate-400 uppercase">{MONTHS_TH[parseLocalDate(record.date).getMonth()].substring(0,3)}</span>
-                        </div>
-                        <div><div className="font-bold text-slate-800 text-sm">{record.hours} ชม. <span className="text-[10px] text-blue-600 ml-1 font-bold">x{record.type}</span></div>{record.note && <div className="text-[10px] text-slate-400 font-medium">{record.note}</div>}</div>
+            {viewMode === 'list' ? (
+              <div className="space-y-3">
+                {filteredRecords.map(record => {
+                  const cycleMonthOfRecord = getCycleMonthStr(record.date);
+                  const salaryForRecord = getEffectiveSalary(cycleMonthOfRecord);
+                  const amount = calculateOTAmount(record, salaryForRecord, cycleMonthOfRecord);
+                  return (
+                    <div key={record.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-slate-50 rounded-2xl flex flex-col items-center justify-center font-bold">
+                            <span className="text-xs">{parseLocalDate(record.date).getDate()}</span>
+                            <span className="text-[8px] text-slate-400 uppercase">{MONTHS_TH[parseLocalDate(record.date).getMonth()].substring(0,3)}</span>
+                          </div>
+                          <div><div className="font-bold text-slate-800 text-sm">{record.hours} ชม. <span className="text-[10px] text-blue-600 ml-1 font-bold">x{record.type}</span></div>{record.note && <div className="text-[10px] text-slate-400 font-medium">{record.note}</div>}</div>
+                      </div>
+                      <div className="flex items-center gap-3"><div className="font-bold text-sm">฿{amount.toLocaleString()}</div><button onClick={() => setRecords(prev => prev.filter(r => r.id !== record.id))} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-4 h-4" /></button></div>
                     </div>
-                    <div className="flex items-center gap-3"><div className="font-bold text-sm">฿{amount.toLocaleString()}</div><button onClick={() => setRecords(prev => prev.filter(r => r.id !== record.id))} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-4 h-4" /></button></div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
+                <div className="grid grid-cols-7 gap-1">
+                    {['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map(day => (<div key={day} className="text-center text-[9px] font-bold text-slate-300 py-2 uppercase">{day}</div>))}
+                    {Array.from({ length: periodRange.startDayOfWeek }).map((_, i) => <div key={`pad-${i}`} className="aspect-square"></div>)}
+                    {calendarDays.map((item) => (
+                      <button key={item.dateStr} onClick={() => { if (item.records.length > 0) setSelectedDayInfo(item); else { setFormData({...formData, date: item.dateStr}); setIsAdding(true); } }} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative border transition-all ios-active ${item.isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-50 bg-slate-50/50'}`}>
+                        <span className={`text-[10px] font-bold ${item.isToday ? 'text-blue-600' : 'text-slate-400'}`}>{item.date.getDate()}</span>
+                        {item.records.length > 0 && <span className="text-[7px] font-bold text-blue-600 leading-tight">฿{item.records.reduce((sum, r) => sum + calculateOTAmount(r, getEffectiveSalary(getCycleMonthStr(r.date)), getCycleMonthStr(r.date)), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div className="space-y-4">
@@ -494,7 +498,7 @@ const App: React.FC = () => {
                  </div>
               </SettingSection>
 
-              <SettingSection title="ข้อมูลหลัก & ปี">
+              <SettingSection title="ข้อมูลรายปี (สำหรับปีอื่นๆ)">
                 <div className="p-6 space-y-4">
                   <div className="space-y-1 mb-4">
                      <label className="text-[10px] font-bold text-slate-400 uppercase">เงินเดือนพื้นฐาน (Global)</label>
@@ -524,7 +528,7 @@ const App: React.FC = () => {
                  </div>
               </SettingSection>
 
-              <button onClick={handleLogoutAction} className={`w-full p-5 rounded-2xl font-bold border transition-all ${logoutConfirm ? 'bg-red-600 text-white border-red-700' : 'bg-red-50 text-red-600 border-red-100'}`}>{logoutConfirm ? 'ยืนยันออกจากระบบ' : 'ออกจากระบบ / สลับบัญชี'}</button>
+              <button onClick={() => { if (!logoutConfirm) { setLogoutConfirm(true); setTimeout(() => setLogoutConfirm(false), 5000); return; } localStorage.removeItem('ot_bfc_user_email'); setUserEmail(null); setIsSettingsOpen(false); setIsSyncReady(false); setRecords([]); }} className={`w-full p-5 rounded-2xl font-bold border transition-all ${logoutConfirm ? 'bg-red-600 text-white border-red-700' : 'bg-red-50 text-red-600 border-red-100'}`}>{logoutConfirm ? 'ยืนยันออกจากระบบ' : 'ออกจากระบบ / สลับบัญชี'}</button>
            </div>
         </div>
       )}
@@ -540,6 +544,28 @@ const App: React.FC = () => {
                 <button type="submit" className="w-full bg-blue-600 text-white p-5 rounded-2xl font-bold shadow-xl ios-active">บันทึกข้อมูล</button>
               </form>
           </div>
+        </div>
+      )}
+
+      {selectedDayInfo && (
+        <div className="fixed inset-0 z-[70] flex items-end justify-center">
+           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedDayInfo(null)}></div>
+           <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full max-h-[80vh] overflow-y-auto">
+              <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-6"></div>
+              <div className="flex justify-between items-center mb-6 px-2"><h3 className="text-xl font-bold text-slate-900">รายละเอียด {parseLocalDate(selectedDayInfo.dateStr).getDate()} {MONTHS_TH[parseLocalDate(selectedDayInfo.dateStr).getMonth()]}</h3><button onClick={() => { setIsAdding(true); setFormData({...formData, date: selectedDayInfo.dateStr}); setSelectedDayInfo(null); }} className="p-2 bg-blue-50 text-blue-600 rounded-full ios-active"><Plus className="w-5 h-5" /></button></div>
+              <div className="space-y-3 pb-12">
+                 {selectedDayInfo.records.map(record => {
+                    const cycleMonth = getCycleMonthStr(record.date);
+                    const amount = calculateOTAmount(record, getEffectiveSalary(cycleMonth), cycleMonth);
+                    return (
+                      <div key={record.id} className="bg-slate-50 p-5 rounded-3xl flex justify-between items-center border border-slate-100 shadow-sm">
+                        <div><div className="flex items-center gap-2"><span className="font-bold text-slate-800 text-lg">{record.hours} ชม.</span><span className="text-[10px] bg-white px-2 py-1 rounded-full border border-slate-200 font-bold">x{record.type}</span></div>{record.note && <p className="text-xs font-medium text-slate-500 mt-1">{record.note}</p>}</div>
+                        <div className="flex items-center gap-4"><span className="font-bold text-lg text-slate-900">฿{amount.toLocaleString()}</span><button onClick={() => { setRecords(prev => prev.filter(r => r.id !== record.id)); setSelectedDayInfo(null); }} className="text-red-400 p-2 ios-active"><Trash2 className="w-5 h-5" /></button></div>
+                      </div>
+                    );
+                 })}
+              </div>
+           </div>
         </div>
       )}
     </div>
