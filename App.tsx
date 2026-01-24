@@ -105,7 +105,7 @@ const LogoImage = ({ className }: { className?: string }) => {
         <img src="logo.png" alt="BFC MONEY" className="w-full h-full object-contain" onError={() => setError(true)} />
       ) : (
         <div className="w-full h-full bg-blue-600 flex flex-col items-center justify-center text-white p-1 text-center">
-          <TrendingUp className="w-4 h-4" />
+          <div className="text-xs font-bold">BFC</div>
         </div>
       )}
     </div>
@@ -128,7 +128,6 @@ const App: React.FC = () => {
 
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error' | 'offline'>('idle');
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
-  const [syncErrorLog, setSyncErrorLog] = useState<string | null>(null);
   const [isPullingInitial, setIsPullingInitial] = useState(false);
   const [isSyncReady, setIsSyncReady] = useState(false);
   const syncTimeoutRef = useRef<number | null>(null);
@@ -137,7 +136,6 @@ const App: React.FC = () => {
   const [newYearInput, setNewYearInput] = useState(new Date().getFullYear().toString());
   const [newSalaryInput, setNewSalaryInput] = useState('0');
 
-  // ดึงค่าสวัสดิการและข้อมูลการทำงานของเดือนนั้นๆ
   const getMonthlyWelfare = useCallback((monthStr: string): MonthlyAdjustment => {
     const adj = settings.monthlyAdjustments?.[monthStr];
     if (adj) return { ...adj };
@@ -154,7 +152,6 @@ const App: React.FC = () => {
     };
   }, [settings]);
 
-  // ดึงเงินเดือนที่มีผลบังคับใช้ในเดือนนั้นๆ
   const getEffectiveSalary = useCallback((monthStr: string) => {
     const adj = settings.monthlyAdjustments?.[monthStr];
     if (adj?.baseSalary !== undefined && adj.baseSalary > 0) return adj.baseSalary;
@@ -162,12 +159,14 @@ const App: React.FC = () => {
     return settings.yearlySalaries[yearStr] || settings.baseSalary;
   }, [settings]);
 
-  // คำนวณค่าโอที
-  const calculateOTAmount = useCallback((record: OTRecord, salary: number, monthStr: string) => {
-    const welfare = getMonthlyWelfare(monthStr);
+  // หัวใจสำคัญ: คำนวณเงินจากเดือนที่เกิดรายการจริง
+  const calculateOTAmountByActualDate = useCallback((record: OTRecord) => {
+    const actualMonth = record.date.substring(0, 7); // 'YYYY-MM'
+    const salary = getEffectiveSalary(actualMonth);
+    const welfare = getMonthlyWelfare(actualMonth);
     const hRate = salary / (welfare.workingDaysPerMonth * welfare.workingHoursPerDay);
     return record.hours * hRate * record.type;
-  }, [getMonthlyWelfare]);
+  }, [getEffectiveSalary, getMonthlyWelfare]);
 
   const updateMonthlySetting = (field: keyof MonthlyAdjustment, value: any) => {
     const currentAdj = getMonthlyWelfare(currentViewMonth);
@@ -198,7 +197,7 @@ const App: React.FC = () => {
       setLastSyncTime(new Date().toLocaleTimeString('th-TH'));
       setTimeout(() => setSyncStatus('idle'), 3000);
       return { success: true, data };
-    } catch (e: any) { setSyncStatus('error'); setSyncErrorLog(e.message); return { success: false, error: e.message }; }
+    } catch (e: any) { setSyncStatus('error'); return { success: false, error: e.message }; }
   }, []);
 
   const handlePullData = useCallback(async (email: string) => {
@@ -242,12 +241,6 @@ const App: React.FC = () => {
     }
   }, [records, settings, userEmail, isSyncReady, handlePushData]);
 
-  const handleLogoutAction = () => {
-    if (!logoutConfirm) { setLogoutConfirm(true); setTimeout(() => setLogoutConfirm(false), 5000); return; }
-    localStorage.removeItem('ot_bfc_user_email');
-    setUserEmail(null); setIsSettingsOpen(false); setIsSyncReady(false); setRecords([]);
-  };
-
   const currentViewSalary = useMemo(() => getEffectiveSalary(currentViewMonth), [getEffectiveSalary, currentViewMonth]);
   const periodRange = useMemo(() => {
     const [year, month] = currentViewMonth.split('-').map(Number);
@@ -274,15 +267,13 @@ const App: React.FC = () => {
     return days;
   }, [periodRange, filteredRecords]);
 
-  // สถิติรายเดือน
+  // สถิติรายวิก - คำนวณโอทีแต่ละตัวตามเดือนที่เกิดจริง
   const monthlyStats = useMemo(() => {
     const welfare = getMonthlyWelfare(currentViewMonth);
     const mainSalary = currentViewSalary;
     
     const totalOT = filteredRecords.reduce((sum, r) => {
-      const cycleMonthOfRecord = getCycleMonthStr(r.date);
-      const salaryForRecord = getEffectiveSalary(cycleMonthOfRecord);
-      return sum + calculateOTAmount(r, salaryForRecord, cycleMonthOfRecord);
+      return sum + calculateOTAmountByActualDate(r);
     }, 0);
     
     const pvd = (mainSalary * welfare.providentFundRate) / 100;
@@ -293,27 +284,27 @@ const App: React.FC = () => {
     }
     const gross = mainSalary + totalOT + welfare.foodAllowance + welfare.diligenceAllowance + welfare.shiftAllowance + welfare.specialIncome;
     return { totalOT, netSalary: gross - (pvd + ss), welfare, pvd, ss };
-  }, [filteredRecords, currentViewSalary, currentViewMonth, getMonthlyWelfare, getEffectiveSalary, calculateOTAmount, settings]);
+  }, [filteredRecords, currentViewSalary, currentViewMonth, getMonthlyWelfare, calculateOTAmountByActualDate, settings]);
 
   const monthlySummaries = useMemo(() => {
     const summaries: Record<string, { totalOT: number, totalHours: number, count: number }> = {};
     records.forEach(r => {
       const cycleMonth = getCycleMonthStr(r.date);
       if (!summaries[cycleMonth]) summaries[cycleMonth] = { totalOT: 0, totalHours: 0, count: 0 };
-      const salaryForRecord = getEffectiveSalary(cycleMonth);
-      summaries[cycleMonth].totalOT += calculateOTAmount(r, salaryForRecord, cycleMonth);
+      summaries[cycleMonth].totalOT += calculateOTAmountByActualDate(r);
       summaries[cycleMonth].totalHours += r.hours;
       summaries[cycleMonth].count += 1;
     });
     return Object.entries(summaries).sort((a, b) => b[0].localeCompare(a[0])).map(([month, data]) => ({ month, ...data }));
-  }, [records, getEffectiveSalary, calculateOTAmount]);
+  }, [records, calculateOTAmountByActualDate]);
 
   const handleAddRecord = (e: React.FormEvent) => {
     e.preventDefault();
-    const cycleMonth = getCycleMonthStr(formData.date);
-    const salaryForDate = getEffectiveSalary(cycleMonth);
-    const welfare = getMonthlyWelfare(cycleMonth);
-    const hRate = salaryForDate / (welfare.workingDaysPerMonth * welfare.workingHoursPerDay);
+    const actualMonth = formData.date.substring(0, 7);
+    const salary = getEffectiveSalary(actualMonth);
+    const welfare = getMonthlyWelfare(actualMonth);
+    const hRate = salary / (welfare.workingDaysPerMonth * welfare.workingHoursPerDay);
+    
     const newRecord: OTRecord = {
       id: Date.now().toString(),
       date: formData.date,
@@ -330,12 +321,31 @@ const App: React.FC = () => {
 
   const currentWelfare = monthlyStats.welfare;
 
+  if (!userEmail) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="w-full max-w-sm bg-white rounded-[2.5rem] p-8 shadow-xl border border-slate-100 animate-in fade-in zoom-in duration-500">
+           <div className="flex flex-col items-center mb-8">
+              <LogoImage className="w-20 h-20 rounded-3xl shadow-lg mb-4" />
+              <h2 className="text-2xl font-bold text-slate-900">BFC MONEY</h2>
+              <p className="text-slate-400 text-sm mt-1">ยินดีต้อนรับสู่ระบบบันทึกโอที</p>
+           </div>
+           <form onSubmit={(e) => { e.preventDefault(); if (emailInput.includes('@')) { localStorage.setItem('ot_bfc_user_email', emailInput.toLowerCase().trim()); setUserEmail(emailInput.toLowerCase().trim()); } }} className="space-y-4">
+              <input type="email" placeholder="ใส่อีเมลของคุณเพื่อซิงค์ข้อมูล" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} className="w-full bg-slate-50 p-5 rounded-2xl border-0 font-bold outline-none ring-2 ring-transparent focus:ring-blue-600 transition-all" required />
+              <button type="submit" className="w-full bg-blue-600 text-white p-5 rounded-2xl font-bold shadow-lg shadow-blue-600/20 ios-active">เริ่มต้นใช้งาน</button>
+           </form>
+           <p className="text-[10px] text-slate-300 text-center mt-6">ข้อมูลของคุณจะถูกเก็บอย่างปลอดภัยบน Cloud Sync</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen max-w-lg mx-auto bg-slate-50 relative flex flex-col overflow-hidden">
       {isPullingInitial && (
         <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-10 text-center animate-in fade-in duration-300">
           <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-6" />
-          <h2 className="text-xl font-bold text-slate-900 mb-2">กำลังโหลด...</h2>
+          <h2 className="text-xl font-bold text-slate-900 mb-2">กำลังซิงค์ข้อมูลล่าสุด...</h2>
         </div>
       )}
 
@@ -401,8 +411,11 @@ const App: React.FC = () => {
 
             {showBreakdown && (
               <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 space-y-3 animate-in slide-in-from-top-4">
-                <BreakdownRow label="เงินเดือนประจำเดือน" value={currentViewSalary} />
-                <BreakdownRow label="ค่าล่วงเวลา (OT)" value={monthlyStats.totalOT} isHighlight />
+                <BreakdownRow label="เงินเดือนประจำวิก" value={currentViewSalary} />
+                <div className="flex flex-col">
+                  <BreakdownRow label="ค่าล่วงเวลา (OT)" value={monthlyStats.totalOT} isHighlight />
+                  <p className="text-[9px] text-slate-400 px-1 font-medium">* คิดตามเงินเดือนของเดือนที่เกิดงานจริง</p>
+                </div>
                 <BreakdownRow label="ค่าอาหาร" value={currentWelfare.foodAllowance} />
                 <BreakdownRow label="เบี้ยขยัน" value={currentWelfare.diligenceAllowance} />
                 <BreakdownRow label="ค่ากะ" value={currentWelfare.shiftAllowance} />
@@ -417,9 +430,7 @@ const App: React.FC = () => {
             {viewMode === 'list' ? (
               <div className="space-y-3">
                 {filteredRecords.map(record => {
-                  const cycleMonthOfRecord = getCycleMonthStr(record.date);
-                  const salaryForRecord = getEffectiveSalary(cycleMonthOfRecord);
-                  const amount = calculateOTAmount(record, salaryForRecord, cycleMonthOfRecord);
+                  const amount = calculateOTAmountByActualDate(record);
                   return (
                     <div key={record.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex items-center justify-between">
                       <div className="flex items-center gap-4">
@@ -442,7 +453,7 @@ const App: React.FC = () => {
                     {calendarDays.map((item) => (
                       <button key={item.dateStr} onClick={() => { if (item.records.length > 0) setSelectedDayInfo(item); else { setFormData({...formData, date: item.dateStr}); setIsAdding(true); } }} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative border transition-all ios-active ${item.isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-50 bg-slate-50/50'}`}>
                         <span className={`text-[10px] font-bold ${item.isToday ? 'text-blue-600' : 'text-slate-400'}`}>{item.date.getDate()}</span>
-                        {item.records.length > 0 && <span className="text-[7px] font-bold text-blue-600 leading-tight">฿{item.records.reduce((sum, r) => sum + calculateOTAmount(r, getEffectiveSalary(getCycleMonthStr(r.date)), getCycleMonthStr(r.date)), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>}
+                        {item.records.length > 0 && <span className="text-[7px] font-bold text-blue-600 leading-tight">฿{item.records.reduce((sum, r) => sum + calculateOTAmountByActualDate(r), 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>}
                       </button>
                     ))}
                 </div>
@@ -537,6 +548,7 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[70] flex items-end justify-center">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsAdding(false)}></div>
           <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full duration-500">
+              <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-6"></div>
               <h3 className="text-2xl font-bold mb-6">บันทึกโอที</h3>
               <form onSubmit={handleAddRecord} className="space-y-6">
                 <div className="space-y-1"><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">วันที่</label><input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold" /></div>
@@ -555,8 +567,7 @@ const App: React.FC = () => {
               <div className="flex justify-between items-center mb-6 px-2"><h3 className="text-xl font-bold text-slate-900">รายละเอียด {parseLocalDate(selectedDayInfo.dateStr).getDate()} {MONTHS_TH[parseLocalDate(selectedDayInfo.dateStr).getMonth()]}</h3><button onClick={() => { setIsAdding(true); setFormData({...formData, date: selectedDayInfo.dateStr}); setSelectedDayInfo(null); }} className="p-2 bg-blue-50 text-blue-600 rounded-full ios-active"><Plus className="w-5 h-5" /></button></div>
               <div className="space-y-3 pb-12">
                  {selectedDayInfo.records.map(record => {
-                    const cycleMonth = getCycleMonthStr(record.date);
-                    const amount = calculateOTAmount(record, getEffectiveSalary(cycleMonth), cycleMonth);
+                    const amount = calculateOTAmountByActualDate(record);
                     return (
                       <div key={record.id} className="bg-slate-50 p-5 rounded-3xl flex justify-between items-center border border-slate-100 shadow-sm">
                         <div><div className="flex items-center gap-2"><span className="font-bold text-slate-800 text-lg">{record.hours} ชม.</span><span className="text-[10px] bg-white px-2 py-1 rounded-full border border-slate-200 font-bold">x{record.type}</span></div>{record.note && <p className="text-xs font-medium text-slate-500 mt-1">{record.note}</p>}</div>
