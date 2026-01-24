@@ -38,12 +38,12 @@ import {
   ShieldCheck,
   Zap,
   ExternalLink,
-  Smartphone
+  Smartphone,
+  Loader2
 } from 'lucide-react';
-import { OTRecord, UserSettings, OTType } from './types.ts';
+import { OTRecord, UserSettings, OTType, MonthlyAdjustment } from './types.ts';
 import { OT_TYPES, DEFAULT_SETTINGS, MONTHS_TH } from './constants.ts';
 
-// คีย์หลักสำหรับระบบ Cloud V4
 const CLOUD_NAMESPACE = 'bfc_v4_resilient';
 
 const formatLocalISO = (date: Date) => {
@@ -63,13 +63,9 @@ const getCycleMonthStr = (dateStr: string) => {
   const day = date.getDate();
   let cycleMonth = date.getMonth();
   let cycleYear = date.getFullYear();
-
   if (day > 15) {
     cycleMonth += 1;
-    if (cycleMonth > 11) {
-      cycleMonth = 0;
-      cycleYear += 1;
-    }
+    if (cycleMonth > 11) { cycleMonth = 0; cycleYear += 1; }
   }
   return `${cycleYear}-${String(cycleMonth + 1).padStart(2, '0')}`;
 };
@@ -106,12 +102,7 @@ const LogoImage = ({ className }: { className?: string }) => {
   return (
     <div className={`${className} flex items-center justify-center overflow-hidden bg-slate-50 border border-slate-100`}>
       {!error ? (
-        <img 
-          src="logo.png" 
-          alt="BFC MONEY" 
-          className="w-full h-full object-contain"
-          onError={() => setError(true)}
-        />
+        <img src="logo.png" alt="BFC MONEY" className="w-full h-full object-contain" onError={() => setError(true)} />
       ) : (
         <div className="w-full h-full bg-blue-600 flex flex-col items-center justify-center text-white p-1 text-center">
           <TrendingUp className="w-4 h-4" />
@@ -128,152 +119,130 @@ const App: React.FC = () => {
   const [records, setRecords] = useState<OTRecord[]>([]);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [viewMode, setViewMode] = useState<'list' | 'calendar' | 'summary'>('list');
-  
-  const [currentViewMonth, setCurrentViewMonth] = useState(() => {
-    const now = new Date();
-    return getCycleMonthStr(formatLocalISO(now));
-  });
+  const [currentViewMonth, setCurrentViewMonth] = useState(() => getCycleMonthStr(formatLocalISO(new Date())));
 
   const [isAdding, setIsAdding] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [selectedDayInfo, setSelectedDayInfo] = useState<{ dateStr: string, records: OTRecord[] } | null>(null);
 
-  // Sync Engine V4 States
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error' | 'offline'>('idle');
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [syncErrorLog, setSyncErrorLog] = useState<string | null>(null);
-  const [isFirstLoad, setIsFirstLoad] = useState(true);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isPullingInitial, setIsPullingInitial] = useState(false);
+  const [isSyncReady, setIsSyncReady] = useState(false);
   const syncTimeoutRef = useRef<number | null>(null);
 
-  const [formData, setFormData] = useState({
-    date: formatLocalISO(new Date()),
-    hours: 1,
-    type: 1.5 as OTType,
-    note: ''
-  });
-
+  const [formData, setFormData] = useState({ date: formatLocalISO(new Date()), hours: 1, type: 1.5 as OTType, note: '' });
   const [newYearInput, setNewYearInput] = useState(new Date().getFullYear().toString());
   const [newSalaryInput, setNewSalaryInput] = useState('0');
 
-  // Connectivity Monitor
-  useEffect(() => {
-    const updateOnline = () => setIsOnline(navigator.onLine);
-    window.addEventListener('online', updateOnline);
-    window.addEventListener('offline', updateOnline);
-    return () => {
-      window.removeEventListener('online', updateOnline);
-      window.removeEventListener('offline', updateOnline);
+  // ดึงค่าสวัสดิการและข้อมูลการทำงานของเดือนนั้นๆ
+  const getMonthlyWelfare = useCallback((monthStr: string): MonthlyAdjustment => {
+    const adj = settings.monthlyAdjustments?.[monthStr];
+    if (adj) return { ...adj };
+    
+    // หากไม่มีการตั้งค่าเดือนนั้น ให้ใช้ค่าจาก Global เป็นค่าเริ่มต้น
+    return {
+      baseSalary: undefined,
+      workingDaysPerMonth: settings.workingDaysPerMonth,
+      workingHoursPerDay: settings.workingHoursPerDay,
+      foodAllowance: settings.foodAllowance,
+      diligenceAllowance: settings.diligenceAllowance,
+      shiftAllowance: settings.shiftAllowance,
+      specialIncome: settings.specialIncome,
+      providentFundRate: settings.providentFundRate,
+      enableSocialSecurity: settings.enableSocialSecurity
     };
-  }, []);
+  }, [settings]);
 
-  const getSyncKey = (email: string) => {
-    return `${CLOUD_NAMESPACE}_${btoa(email.toLowerCase().trim()).replace(/[^a-zA-Z0-9]/g, '').substring(0, 20)}`;
+  // ดึงเงินเดือนที่มีผลบังคับใช้ในเดือนนั้นๆ
+  const getEffectiveSalary = useCallback((monthStr: string) => {
+    const adj = settings.monthlyAdjustments?.[monthStr];
+    if (adj?.baseSalary !== undefined && adj.baseSalary > 0) return adj.baseSalary;
+    const yearStr = monthStr.split('-')[0];
+    return settings.yearlySalaries[yearStr] || settings.baseSalary;
+  }, [settings]);
+
+  // คำนวณค่าโอทีโดยดึง วันทำงาน/ชม.ทำงาน จาก Monthly Adjustment ของเดือนนั้นๆ
+  const calculateOTAmount = useCallback((record: OTRecord, salary: number, monthStr: string) => {
+    const welfare = getMonthlyWelfare(monthStr);
+    const hRate = salary / (welfare.workingDaysPerMonth * welfare.workingHoursPerDay);
+    return record.hours * hRate * record.type;
+  }, [getMonthlyWelfare]);
+
+  const updateMonthlySetting = (field: keyof MonthlyAdjustment, value: any) => {
+    const currentAdj = getMonthlyWelfare(currentViewMonth);
+    setSettings({
+      ...settings,
+      monthlyAdjustments: {
+        ...settings.monthlyAdjustments,
+        [currentViewMonth]: { ...currentAdj, [field]: value }
+      }
+    });
   };
 
-  // Sync Engine logic
   const performCloudSync = useCallback(async (action: 'push' | 'pull', email: string, dataToPush?: any) => {
-    if (!navigator.onLine) {
-      setSyncStatus('offline');
-      return { success: false, error: 'Network Offline' };
-    }
-
+    if (!navigator.onLine) { setSyncStatus('offline'); return { success: false, error: 'Offline' }; }
     setSyncStatus('syncing');
-    setSyncErrorLog(null);
-    const key = getSyncKey(email);
+    const key = `bfc_v4_resilient_${btoa(email.toLowerCase().trim()).replace(/[^a-zA-Z0-9]/g, '').substring(0, 20)}`;
     const url = `https://kvdb.io/S3Vp4jFfC4r5qG8z9/${key}`;
-
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-
       const response = await fetch(url, {
         method: action === 'push' ? 'POST' : 'GET',
         headers: action === 'push' ? { 'Content-Type': 'application/json' } : {},
         body: action === 'push' ? JSON.stringify({ ...dataToPush, ts: Date.now() }) : undefined,
-        signal: controller.signal,
-        mode: 'cors'
       });
-
-      clearTimeout(timeout);
+      if (!response.ok && action === 'pull' && response.status === 404) { setSyncStatus('idle'); return { success: true, data: null }; }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
       const data = action === 'pull' ? await response.json() : null;
       setSyncStatus('success');
       setLastSyncTime(new Date().toLocaleTimeString('th-TH'));
       setTimeout(() => setSyncStatus('idle'), 3000);
       return { success: true, data };
-    } catch (e: any) {
-      setSyncStatus('error');
-      setSyncErrorLog(e.message || 'Unknown');
-      return { success: false, error: e.message };
-    }
+    } catch (e: any) { setSyncStatus('error'); setSyncErrorLog(e.message); return { success: false, error: e.message }; }
   }, []);
 
   const handlePullData = useCallback(async (email: string) => {
     const result = await performCloudSync('pull', email);
     if (result.success && result.data && result.data.records) {
       setRecords(result.data.records);
-      setSettings(result.data.settings);
+      setSettings({ ...DEFAULT_SETTINGS, ...result.data.settings });
       return true;
     }
     return false;
   }, [performCloudSync]);
 
   const handlePushData = useCallback(async () => {
-    if (!userEmail) return;
+    if (!userEmail || !isSyncReady) return;
     await performCloudSync('push', userEmail, { records, settings });
-  }, [userEmail, records, settings, performCloudSync]);
+  }, [userEmail, records, settings, isSyncReady, performCloudSync]);
 
-  // Initial Data Load & Migration Logic
   useEffect(() => {
     if (userEmail) {
       const init = async () => {
-        // --- Migration: กู้ข้อมูลจากคีย์เก่ากรณีหาคีย์ใหม่ไม่เจอ ---
-        const newRecsKey = `ot_recs_${userEmail}`;
-        const newSettKey = `ot_sett_${userEmail}`;
-        const oldRecsKey = `ot_records_${userEmail}`;
-        const oldSettKey = `user_settings_${userEmail}`;
-
-        let savedRecords = localStorage.getItem(newRecsKey);
-        let savedSettings = localStorage.getItem(newSettKey);
-
-        // ถ้าคีย์ใหม่ไม่มี แต่มีคีย์เก่า ให้ย้ายข้อมูล
-        if (!savedRecords && localStorage.getItem(oldRecsKey)) {
-          savedRecords = localStorage.getItem(oldRecsKey);
-        }
-        if (!savedSettings && localStorage.getItem(oldSettKey)) {
-          savedSettings = localStorage.getItem(oldSettKey);
-        }
-
-        if (savedRecords) setRecords(JSON.parse(savedRecords));
-        if (savedSettings) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) });
-        
-        // กู้คืนจาก Cloud เสมอเพื่อความมั่นใจ
+        setIsPullingInitial(true);
+        const localRecs = localStorage.getItem(`ot_recs_${userEmail}`);
+        const localSett = localStorage.getItem(`ot_sett_${userEmail}`);
+        if (localRecs) setRecords(JSON.parse(localRecs));
+        if (localSett) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(localSett) });
         await handlePullData(userEmail);
-        setIsFirstLoad(false);
+        setIsPullingInitial(false);
+        setIsSyncReady(true);
       };
       init();
     }
   }, [userEmail, handlePullData]);
 
-  // Save to Local & Trigger Cloud Push
   useEffect(() => {
-    if (userEmail && !isFirstLoad) {
+    if (userEmail && isSyncReady) {
       localStorage.setItem(`ot_recs_${userEmail}`, JSON.stringify(records));
       localStorage.setItem(`ot_sett_${userEmail}`, JSON.stringify(settings));
-      
       if (syncTimeoutRef.current) window.clearTimeout(syncTimeoutRef.current);
-      syncTimeoutRef.current = window.setTimeout(() => {
-        handlePushData();
-      }, 3000);
-
-      return () => {
-        if (syncTimeoutRef.current) window.clearTimeout(syncTimeoutRef.current);
-      };
+      syncTimeoutRef.current = window.setTimeout(() => handlePushData(), 3000);
+      return () => { if (syncTimeoutRef.current) window.clearTimeout(syncTimeoutRef.current); };
     }
-  }, [records, settings, userEmail, isFirstLoad, handlePushData]);
+  }, [records, settings, userEmail, isSyncReady, handlePushData]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -285,44 +254,21 @@ const App: React.FC = () => {
   };
 
   const handleLogoutAction = () => {
-    if (!logoutConfirm) {
-      setLogoutConfirm(true);
-      setTimeout(() => setLogoutConfirm(false), 5000);
-      return;
-    }
+    if (!logoutConfirm) { setLogoutConfirm(true); setTimeout(() => setLogoutConfirm(false), 5000); return; }
     localStorage.removeItem('ot_bfc_user_email');
-    setUserEmail(null);
-    setIsSettingsOpen(false);
-    setIsFirstLoad(true);
-    setRecords([]);
+    setUserEmail(null); setIsSettingsOpen(false); setIsSyncReady(false); setRecords([]);
   };
 
-  const copyManualBackup = () => {
-    const backupData = JSON.stringify({ records, settings });
-    const encoded = btoa(unescape(encodeURIComponent(backupData)));
-    navigator.clipboard.writeText(encoded);
-    alert('คัดลอกรหัสกู้คืนข้อมูลแล้ว');
-  };
-
-  const getSalaryForYear = (year: string) => settings.yearlySalaries[year] || settings.baseSalary;
-  const currentViewSalary = useMemo(() => getSalaryForYear(currentViewMonth.split('-')[0]), [settings, currentViewMonth]);
-
+  const currentViewSalary = useMemo(() => getEffectiveSalary(currentViewMonth), [getEffectiveSalary, currentViewMonth]);
   const periodRange = useMemo(() => {
     const [year, month] = currentViewMonth.split('-').map(Number);
     const startDate = new Date(year, month - 2, 16);
     const endDate = new Date(year, month - 1, 15);
-    return {
-      start: formatLocalISO(startDate),
-      end: formatLocalISO(endDate),
-      label: `${startDate.getDate()} ${MONTHS_TH[startDate.getMonth()]} - ${endDate.getDate()} ${MONTHS_TH[endDate.getMonth()]} ${endDate.getFullYear() + 543}`,
-      startDayOfWeek: startDate.getDay()
-    };
+    return { start: formatLocalISO(startDate), end: formatLocalISO(endDate), startDayOfWeek: startDate.getDay() };
   }, [currentViewMonth]);
 
   const filteredRecords = useMemo(() => {
-    return records
-      .filter(r => r.date >= periodRange.start && r.date <= periodRange.end)
-      .sort((a, b) => b.date.localeCompare(a.date));
+    return records.filter(r => r.date >= periodRange.start && r.date <= periodRange.end).sort((a, b) => b.date.localeCompare(a.date));
   }, [records, periodRange]);
 
   const calendarDays = useMemo(() => {
@@ -330,7 +276,6 @@ const App: React.FC = () => {
     let curr = parseLocalDate(periodRange.start);
     const last = parseLocalDate(periodRange.end);
     const todayStr = formatLocalISO(new Date());
-
     while (curr <= last) {
       const dateStr = formatLocalISO(curr);
       const dayRecords = filteredRecords.filter(r => r.date === dateStr);
@@ -340,37 +285,46 @@ const App: React.FC = () => {
     return days;
   }, [periodRange, filteredRecords]);
 
+  // สถิติรายเดือน
+  const monthlyStats = useMemo(() => {
+    const welfare = getMonthlyWelfare(currentViewMonth);
+    const mainSalary = currentViewSalary;
+    
+    const totalOT = filteredRecords.reduce((sum, r) => {
+      const cycleMonthOfRecord = getCycleMonthStr(r.date);
+      const salaryForRecord = getEffectiveSalary(cycleMonthOfRecord);
+      return sum + calculateOTAmount(r, salaryForRecord, cycleMonthOfRecord);
+    }, 0);
+    
+    const pvd = (mainSalary * welfare.providentFundRate) / 100;
+    let ss = 0;
+    if (welfare.enableSocialSecurity) {
+      const baseForSS = mainSalary + welfare.foodAllowance;
+      ss = Math.min(settings.socialSecurityMax, Math.floor(baseForSS * (settings.socialSecurityRate / 100)));
+    }
+    const gross = mainSalary + totalOT + welfare.foodAllowance + welfare.diligenceAllowance + welfare.shiftAllowance + welfare.specialIncome;
+    return { totalOT, netSalary: gross - (pvd + ss), welfare, pvd, ss };
+  }, [filteredRecords, currentViewSalary, currentViewMonth, getMonthlyWelfare, getEffectiveSalary, calculateOTAmount, settings]);
+
   const monthlySummaries = useMemo(() => {
     const summaries: Record<string, { totalOT: number, totalHours: number, count: number }> = {};
     records.forEach(r => {
       const cycleMonth = getCycleMonthStr(r.date);
       if (!summaries[cycleMonth]) summaries[cycleMonth] = { totalOT: 0, totalHours: 0, count: 0 };
-      summaries[cycleMonth].totalOT += r.totalAmount;
+      const salaryForRecord = getEffectiveSalary(cycleMonth);
+      summaries[cycleMonth].totalOT += calculateOTAmount(r, salaryForRecord, cycleMonth);
       summaries[cycleMonth].totalHours += r.hours;
       summaries[cycleMonth].count += 1;
     });
     return Object.entries(summaries).sort((a, b) => b[0].localeCompare(a[0])).map(([month, data]) => ({ month, ...data }));
-  }, [records]);
-
-  const calculatedSocialSecurity = useMemo(() => {
-    if (!settings.enableSocialSecurity) return 0;
-    const baseForSS = currentViewSalary + settings.foodAllowance;
-    return Math.min(settings.socialSecurityMax, Math.floor(baseForSS * (settings.socialSecurityRate / 100)));
-  }, [currentViewSalary, settings]);
-
-  const calculatedPvdAmount = useMemo(() => (currentViewSalary * (settings.providentFundRate || 0)) / 100, [currentViewSalary, settings.providentFundRate]);
-
-  const monthlyStats = useMemo(() => {
-    const totalOT = filteredRecords.reduce((sum, r) => sum + r.totalAmount, 0);
-    const gross = currentViewSalary + totalOT + settings.foodAllowance + settings.diligenceAllowance + settings.shiftAllowance + settings.specialIncome;
-    const net = gross - (calculatedPvdAmount + calculatedSocialSecurity);
-    return { totalOT, netSalary: net };
-  }, [filteredRecords, currentViewSalary, settings, calculatedSocialSecurity, calculatedPvdAmount]);
+  }, [records, getEffectiveSalary, calculateOTAmount]);
 
   const handleAddRecord = (e: React.FormEvent) => {
     e.preventDefault();
-    const salaryAtTime = getSalaryForYear(formData.date.split('-')[0]);
-    const hRate = salaryAtTime / (settings.workingDaysPerMonth * settings.workingHoursPerDay);
+    const cycleMonth = getCycleMonthStr(formData.date);
+    const salaryForDate = getEffectiveSalary(cycleMonth);
+    const welfare = getMonthlyWelfare(cycleMonth);
+    const hRate = salaryForDate / (welfare.workingDaysPerMonth * welfare.workingHoursPerDay);
     const newRecord: OTRecord = {
       id: Date.now().toString(),
       date: formData.date,
@@ -385,37 +339,17 @@ const App: React.FC = () => {
     setFormData({ ...formData, note: '' });
   };
 
-  if (!userEmail) {
-    return (
-      <div className="min-h-screen max-w-lg mx-auto bg-[#1e293b] flex flex-col items-center justify-center p-8 overflow-hidden">
-        <div className="w-full space-y-8 animate-in fade-in zoom-in duration-500">
-          <div className="flex flex-col items-center gap-6">
-             <LogoImage className="w-24 h-24 rounded-[2rem] shadow-2xl p-1" />
-             <div className="text-center">
-                <h1 className="text-3xl font-bold text-white tracking-tight">BFC MONEY</h1>
-                <p className="text-[#38bdf8] font-bold text-[10px] uppercase tracking-[0.4em] mt-2">V4 RESILIENT CLOUD</p>
-             </div>
-          </div>
-          <form onSubmit={handleLogin} className="bg-white p-8 rounded-[2.5rem] shadow-2xl space-y-6">
-            <div className="space-y-2">
-               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">อีเมลผู้ใช้งาน</label>
-               <input 
-                 type="email" required placeholder="name@company.com" 
-                 className="w-full bg-slate-50 border-2 border-transparent p-4 rounded-2xl font-bold text-black focus:border-blue-500 transition-all outline-none"
-                 value={emailInput} onChange={(e) => setEmailInput(e.target.value)}
-               />
-            </div>
-            <button type="submit" className="w-full bg-[#1e3a8a] text-white p-5 rounded-2xl font-bold flex items-center justify-center gap-2 ios-active shadow-xl shadow-blue-900/20">
-               เข้าสู่ระบบ <ArrowRight className="w-5 h-5" />
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
+  const currentWelfare = monthlyStats.welfare;
 
   return (
     <div className="min-h-screen max-w-lg mx-auto bg-slate-50 relative flex flex-col overflow-hidden">
+      {isPullingInitial && (
+        <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-10 text-center animate-in fade-in duration-300">
+          <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-6" />
+          <h2 className="text-xl font-bold text-slate-900 mb-2">กำลังโหลด...</h2>
+        </div>
+      )}
+
       <div className="sticky top-0 z-50 w-full bg-white/95 backdrop-blur-xl border-b border-slate-100 shadow-sm">
         <div style={{ height: 'env(safe-area-inset-top)' }} className="bg-white" />
         <header className="px-6 py-4 flex justify-between items-center h-16">
@@ -433,27 +367,11 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="flex gap-2 shrink-0">
-             <button onClick={() => setViewMode('summary')} className={`p-2 rounded-full ios-active ${viewMode === 'summary' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                <BarChart3 className="w-4.5 h-4.5" />
-             </button>
-             <button onClick={() => setViewMode(viewMode === 'list' ? 'calendar' : 'list')} className="p-2 bg-slate-100 rounded-full ios-active">
-                {viewMode === 'list' ? <LayoutGrid className="w-4.5 h-4.5 text-slate-600" /> : <ListIcon className="w-4.5 h-4.5 text-slate-600" />}
-             </button>
-             <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-slate-100 rounded-full ios-active">
-                <SettingsIcon className="w-4.5 h-4.5 text-slate-600" />
-             </button>
+             <button onClick={() => setViewMode('summary')} className={`p-2 rounded-full ios-active ${viewMode === 'summary' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}><BarChart3 className="w-4.5 h-4.5" /></button>
+             <button onClick={() => setViewMode(viewMode === 'list' ? 'calendar' : 'list')} className="p-2 bg-slate-100 rounded-full ios-active">{viewMode === 'list' ? <LayoutGrid className="w-4.5 h-4.5 text-slate-600" /> : <ListIcon className="w-4.5 h-4.5 text-slate-600" />}</button>
+             <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-slate-100 rounded-full ios-active"><SettingsIcon className="w-4.5 h-4.5 text-slate-600" /></button>
           </div>
         </header>
-
-        {syncStatus === 'error' && (
-          <div className="bg-red-500 text-white text-[10px] py-1.5 px-6 flex items-center justify-between animate-in slide-in-from-top-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <CloudOff className="w-3 h-3 shrink-0" />
-              <span className="font-bold truncate">Cloud Error ({syncErrorLog})</span>
-            </div>
-            <button onClick={() => handlePushData()} className="bg-white/20 px-3 py-0.5 rounded-full font-bold hover:bg-white/30 transition-colors shrink-0 ml-2">Retry</button>
-          </div>
-        )}
       </div>
 
       <main className="flex-1 px-4 py-6 space-y-6 pb-32 overflow-y-auto">
@@ -476,7 +394,6 @@ const App: React.FC = () => {
                   setCurrentViewMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
                 }} className="p-2 bg-slate-50 rounded-full ios-active"><ChevronRight className="w-4 h-4 text-slate-500" /></button>
               </div>
-
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="bg-slate-50 rounded-3xl p-5 text-center border border-slate-100">
                   <span className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">โอทีรอบนี้</span>
@@ -487,74 +404,45 @@ const App: React.FC = () => {
                   <h2 className="text-xl font-bold text-blue-600">฿{currentViewSalary.toLocaleString()}</h2>
                 </div>
               </div>
-
-              <button onClick={() => setShowBreakdown(!showBreakdown)} className="w-full bg-[#1e3a8a] text-white p-6 rounded-3xl font-bold flex flex-col items-center ios-active shadow-xl shadow-blue-900/10 transition-all active:bg-[#1a365d]">
-                <span className="text-xs opacity-80 mb-1">ยอดสุทธิรับจริง (หักภาษี/ปปส. แล้ว)</span>
+              <button onClick={() => setShowBreakdown(!showBreakdown)} className="w-full bg-[#1e3a8a] text-white p-6 rounded-3xl font-bold flex flex-col items-center ios-active shadow-xl shadow-blue-900/10 transition-all">
+                <span className="text-xs opacity-80 mb-1">ยอดสุทธิรับจริง</span>
                 <span className="text-3xl font-bold">฿{monthlyStats.netSalary.toLocaleString()}</span>
               </button>
             </div>
 
             {showBreakdown && (
               <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 space-y-3 animate-in slide-in-from-top-4">
-                <BreakdownRow label={`เงินเดือนประจำปี ${currentViewMonth.split('-')[0]}`} value={currentViewSalary} />
+                <BreakdownRow label="เงินเดือนประจำเดือน" value={currentViewSalary} />
                 <BreakdownRow label="ค่าล่วงเวลา (OT)" value={monthlyStats.totalOT} isHighlight />
-                <BreakdownRow label="ค่าอาหาร" value={settings.foodAllowance} />
-                <BreakdownRow label="เบี้ยขยัน" value={settings.diligenceAllowance} />
-                <BreakdownRow label="ค่ากะ" value={settings.shiftAllowance} />
-                <BreakdownRow label="รายรับพิเศษ" value={settings.specialIncome} />
+                <BreakdownRow label="ค่าอาหาร" value={currentWelfare.foodAllowance} />
+                <BreakdownRow label="เบี้ยขยัน" value={currentWelfare.diligenceAllowance} />
+                <BreakdownRow label="ค่ากะ" value={currentWelfare.shiftAllowance} />
+                <BreakdownRow label="รายรับพิเศษ" value={currentWelfare.specialIncome} />
                 <div className="border-t pt-3 mt-1 space-y-1">
-                    <BreakdownRow label="หักประกันสังคม (5%)" value={-calculatedSocialSecurity} isNegative />
-                    <BreakdownRow label="หักกองทุนสำรองฯ" value={-calculatedPvdAmount} isNegative />
+                    <BreakdownRow label="หักประกันสังคม" value={-monthlyStats.ss} isNegative />
+                    <BreakdownRow label="หักกองทุนสำรองฯ" value={-monthlyStats.pvd} isNegative />
                 </div>
               </div>
             )}
 
             <div className="space-y-3">
-              {viewMode === 'list' ? (
-                filteredRecords.map(record => (
+              {filteredRecords.map(record => {
+                const cycleMonthOfRecord = getCycleMonthStr(record.date);
+                const salaryForRecord = getEffectiveSalary(cycleMonthOfRecord);
+                const amount = calculateOTAmount(record, salaryForRecord, cycleMonthOfRecord);
+                return (
                   <div key={record.id} className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 flex items-center justify-between">
                     <div className="flex items-center gap-4">
                         <div className="w-12 h-12 bg-slate-50 rounded-2xl flex flex-col items-center justify-center font-bold">
                           <span className="text-xs">{parseLocalDate(record.date).getDate()}</span>
                           <span className="text-[8px] text-slate-400 uppercase">{MONTHS_TH[parseLocalDate(record.date).getMonth()].substring(0,3)}</span>
                         </div>
-                        <div>
-                          <div className="font-bold text-slate-800 text-sm">{record.hours} ชม. <span className="text-[10px] text-blue-600 ml-1 font-bold">x{record.type}</span></div>
-                          {record.note && <div className="text-[10px] text-slate-400 font-medium">{record.note}</div>}
-                        </div>
+                        <div><div className="font-bold text-slate-800 text-sm">{record.hours} ชม. <span className="text-[10px] text-blue-600 ml-1 font-bold">x{record.type}</span></div>{record.note && <div className="text-[10px] text-slate-400 font-medium">{record.note}</div>}</div>
                     </div>
-                    <div className="flex items-center gap-3">
-                        <div className="font-bold text-sm">฿{record.totalAmount.toLocaleString()}</div>
-                        <button onClick={() => setRecords(prev => prev.filter(r => r.id !== record.id))} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-4 h-4" /></button>
-                    </div>
+                    <div className="flex items-center gap-3"><div className="font-bold text-sm">฿{amount.toLocaleString()}</div><button onClick={() => setRecords(prev => prev.filter(r => r.id !== record.id))} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-4 h-4" /></button></div>
                   </div>
-                ))
-              ) : (
-                <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
-                  <div className="grid grid-cols-7 gap-1">
-                      {['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map(day => (
-                        <div key={day} className="text-center text-[9px] font-bold text-slate-300 py-2 uppercase">{day}</div>
-                      ))}
-                      {Array.from({ length: periodRange.startDayOfWeek }).map((_, i) => <div key={`pad-${i}`} className="aspect-square"></div>)}
-                      {calendarDays.map((item) => {
-                        const dayTotal = item.records.reduce((sum, r) => sum + r.totalAmount, 0);
-                        return (
-                            <button 
-                              key={item.dateStr} 
-                              onClick={() => {
-                                if (item.records.length > 0) setSelectedDayInfo(item);
-                                else { setFormData({...formData, date: item.dateStr}); setIsAdding(true); }
-                              }}
-                              className={`aspect-square rounded-xl flex flex-col items-center justify-center relative border transition-all ios-active ${item.isToday ? 'border-blue-500 bg-blue-50' : 'border-slate-50 bg-slate-50/50'}`}
-                            >
-                              <span className={`text-[10px] font-bold ${item.isToday ? 'text-blue-600' : 'text-slate-400'}`}>{item.date.getDate()}</span>
-                              {dayTotal > 0 && <span className="text-[7px] font-bold text-blue-600 leading-tight">฿{dayTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>}
-                            </button>
-                        );
-                      })}
-                  </div>
-                </div>
-              )}
+                );
+              })}
             </div>
           </>
         ) : (
@@ -563,14 +451,8 @@ const App: React.FC = () => {
                const [y, m] = s.month.split('-').map(Number);
                return (
                 <button key={s.month} onClick={() => { setCurrentViewMonth(s.month); setViewMode('list'); }} className="w-full bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex justify-between items-center ios-active text-left">
-                  <div>
-                     <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">วิก</span>
-                     <h3 className="text-lg font-bold text-slate-800">{MONTHS_TH[m - 1]} {y + 543}</h3>
-                  </div>
-                  <div className="text-right">
-                     <span className="text-[10px] font-bold text-blue-400 uppercase block mb-1">OT รวม</span>
-                     <span className="text-xl font-bold text-blue-600">฿{s.totalOT.toLocaleString()}</span>
-                  </div>
+                  <div><span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">วิก</span><h3 className="text-lg font-bold text-slate-800">{MONTHS_TH[m - 1]} {y + 543}</h3></div>
+                  <div className="text-right"><span className="text-[10px] font-bold text-blue-400 uppercase block mb-1">OT รวม</span><span className="text-xl font-bold text-blue-600">฿{s.totalOT.toLocaleString()}</span></div>
                 </button>
                );
              })}
@@ -579,9 +461,7 @@ const App: React.FC = () => {
       </main>
 
       <div className="fixed bottom-10 left-0 right-0 flex justify-center pointer-events-none z-40">
-         <button onClick={() => setIsAdding(true)} className="bg-[#1e3a8a] text-white w-16 h-16 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto ios-active transition-transform active:scale-90">
-            <Plus className="w-8 h-8" />
-         </button>
+         <button onClick={() => setIsAdding(true)} className="bg-[#1e3a8a] text-white w-16 h-16 rounded-full shadow-2xl flex items-center justify-center pointer-events-auto ios-active"><Plus className="w-8 h-8" /></button>
       </div>
 
       {isSettingsOpen && (
@@ -589,92 +469,62 @@ const App: React.FC = () => {
            <header className="px-6 bg-white border-b shadow-sm">
               <div style={{ height: 'env(safe-area-inset-top)' }} className="bg-white" />
               <div className="flex justify-between items-center py-4">
-                <h3 className="text-xl font-bold">การตั้งค่าระบบ</h3>
+                <h3 className="text-xl font-bold">การตั้งค่า</h3>
                 <button onClick={() => setIsSettingsOpen(false)} className="text-blue-600 font-bold px-4 py-2 bg-blue-50 rounded-2xl ios-active">เสร็จสิ้น</button>
               </div>
            </header>
-           
            <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-32">
-              <SettingSection title="การเชื่อมโยงข้อมูล (Cloud Sync V4)">
+              <SettingSection title={`ข้อมูลเดือน ${MONTHS_TH[parseInt(currentViewMonth.split('-')[1])-1]}`}>
+                <div className="bg-blue-50/30 px-6 py-4 border-b border-blue-50">
+                  <p className="text-[10px] font-bold text-blue-600 leading-relaxed uppercase">ตั้งค่าเฉพาะเดือนนี้: เงินเดือน, วันทำงาน, ชม.ทำงาน และสวัสดิการ</p>
+                </div>
+                <SettingRow label="เงินเดือนเดือนนี้" value={currentWelfare.baseSalary || 0} onChange={v => updateMonthlySetting('baseSalary', parseFloat(v) || 0)} />
+                <SettingRow label="วันทำงาน/เดือน" value={currentWelfare.workingDaysPerMonth} onChange={v => updateMonthlySetting('workingDaysPerMonth', parseFloat(v) || 1)} />
+                <SettingRow label="ชม.ทำงาน/วัน" value={currentWelfare.workingHoursPerDay} onChange={v => updateMonthlySetting('workingHoursPerDay', parseFloat(v) || 1)} />
+                <SettingRow label="ค่าอาหาร" value={currentWelfare.foodAllowance} onChange={v => updateMonthlySetting('foodAllowance', parseFloat(v) || 0)} />
+                <SettingRow label="เบี้ยขยัน" value={currentWelfare.diligenceAllowance} onChange={v => updateMonthlySetting('diligenceAllowance', parseFloat(v) || 0)} />
+                <SettingRow label="ค่ากะ" value={currentWelfare.shiftAllowance} onChange={v => updateMonthlySetting('shiftAllowance', parseFloat(v) || 0)} />
+                <SettingRow label="รายรับพิเศษ" value={currentWelfare.specialIncome} onChange={v => updateMonthlySetting('specialIncome', parseFloat(v) || 0)} />
+                <SettingRow label="กองทุน (%)" value={currentWelfare.providentFundRate} onChange={v => updateMonthlySetting('providentFundRate', parseFloat(v) || 0)} />
+                <div className="flex justify-between items-center px-6 py-5">
+                    <label className="text-sm font-bold text-slate-600">หักประกันสังคม</label>
+                    <button onClick={() => updateMonthlySetting('enableSocialSecurity', !currentWelfare.enableSocialSecurity)} className={`w-12 h-6 rounded-full transition-colors relative ${currentWelfare.enableSocialSecurity ? 'bg-blue-600' : 'bg-slate-200'}`}>
+                      <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${currentWelfare.enableSocialSecurity ? 'left-7' : 'left-1'}`}></div>
+                    </button>
+                 </div>
+              </SettingSection>
+
+              <SettingSection title="ข้อมูลหลัก & ปี">
+                <div className="p-6 space-y-4">
+                  <div className="space-y-1 mb-4">
+                     <label className="text-[10px] font-bold text-slate-400 uppercase">เงินเดือนพื้นฐาน (Global)</label>
+                     <input type="number" value={settings.baseSalary} onChange={e => setSettings({...settings, baseSalary: parseFloat(e.target.value) || 0})} className="w-full bg-slate-50 p-3 rounded-xl font-bold" />
+                  </div>
+                  <div className="flex gap-2">
+                    <input type="number" placeholder="ปี ค.ศ." value={newYearInput} onChange={e => setNewYearInput(e.target.value)} className="w-24 bg-slate-50 p-3 rounded-xl font-bold" />
+                    <input type="number" placeholder="เงินเดือนปีนี้" value={newSalaryInput} onChange={e => setNewSalaryInput(e.target.value)} className="flex-1 bg-slate-50 p-3 rounded-xl font-bold" />
+                    <button onClick={() => { if (!newYearInput || !newSalaryInput) return; setSettings({...settings, yearlySalaries: {...settings.yearlySalaries, [newYearInput]: parseFloat(newSalaryInput)}}); setNewSalaryInput('0'); }} className="bg-blue-600 text-white p-3 rounded-xl"><Save className="w-5 h-5" /></button>
+                  </div>
+                  {Object.entries(settings.yearlySalaries).sort((a,b) => b[0].localeCompare(a[0])).map(([year, sal]) => (
+                    <div key={year} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl"><span className="font-bold text-sm">ปี {year}</span><div className="flex items-center gap-3"><span className="font-bold text-blue-600">฿{sal.toLocaleString()}</span><button onClick={() => { const next = {...settings.yearlySalaries}; delete next[year]; setSettings({...settings, yearlySalaries: next}); }} className="text-red-400 p-1"><Trash2 className="w-4 h-4" /></button></div></div>
+                  ))}
+                </div>
+              </SettingSection>
+
+              <SettingSection title="Cloud Sync">
                  <div className="p-6 space-y-4">
                     <div className="flex items-center gap-4">
-                       <div className={`p-4 rounded-2xl ${syncStatus === 'success' ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'}`}>
-                          {syncStatus === 'syncing' ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Cloud className="w-6 h-6" />}
-                       </div>
-                       <div>
-                          <h4 className="font-bold text-sm">สถานะ Cloud</h4>
-                          <p className="text-[10px] text-slate-500">{lastSyncTime ? `ซิงค์ล่าสุด: ${lastSyncTime}` : 'ยังไม่ระบุ'}</p>
-                       </div>
+                       <div className={`p-4 rounded-2xl ${syncStatus === 'success' ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'}`}>{syncStatus === 'syncing' ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Cloud className="w-6 h-6" />}</div>
+                       <div><h4 className="font-bold text-sm">สถานะ</h4><p className="text-[10px] text-slate-500">{lastSyncTime ? `ซิงค์: ${lastSyncTime}` : 'ไม่ระบุ'}</p></div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
-                       <button onClick={() => handlePullData(userEmail!)} className="flex items-center justify-center gap-2 bg-white text-slate-700 p-4 rounded-2xl font-bold border shadow-sm ios-active">
-                          <CloudDownload className="w-4 h-4" /> ดึงข้อมูล
-                       </button>
-                       <button onClick={() => handlePushData()} className="flex items-center justify-center gap-2 bg-blue-600 text-white p-4 rounded-2xl font-bold ios-active shadow-lg">
-                          <CloudUpload className="w-4 h-4" /> ส่งข้อมูล
-                       </button>
-                    </div>
-                    <button onClick={copyManualBackup} className="w-full flex items-center justify-center gap-2 bg-amber-50 text-amber-700 p-3 rounded-2xl font-bold border border-amber-100 ios-active text-[10px]">
-                       <Copy className="w-3 h-3" /> คัดลอกรหัสกู้คืนข้อมูล (Manual Backup)
-                    </button>
-                 </div>
-              </SettingSection>
-
-              <SettingSection title="เงินเดือนแยกตามปี">
-                 <div className="p-6 space-y-4">
-                    <div className="flex gap-2">
-                       <input type="number" placeholder="ปี ค.ศ." value={newYearInput} onChange={e => setNewYearInput(e.target.value)} className="w-24 bg-slate-50 p-3 rounded-xl font-bold" />
-                       <input type="number" placeholder="เงินเดือน" value={newSalaryInput} onChange={e => setNewSalaryInput(e.target.value)} className="flex-1 bg-slate-50 p-3 rounded-xl font-bold" />
-                       <button onClick={() => {
-                         if (!newYearInput || !newSalaryInput) return;
-                         setSettings({...settings, yearlySalaries: {...settings.yearlySalaries, [newYearInput]: parseFloat(newSalaryInput)}});
-                         setNewSalaryInput('0');
-                       }} className="bg-blue-600 text-white p-3 rounded-xl"><Save className="w-5 h-5" /></button>
-                    </div>
-                    <div className="space-y-2">
-                       {Object.entries(settings.yearlySalaries).sort((a,b) => b[0].localeCompare(a[0])).map(([year, sal]) => (
-                          <div key={year} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl">
-                             <span className="font-bold text-sm">ปี {year}</span>
-                             <div className="flex items-center gap-3">
-                                <span className="font-bold text-blue-600">฿{sal.toLocaleString()}</span>
-                                <button onClick={() => {
-                                  const next = {...settings.yearlySalaries};
-                                  delete next[year];
-                                  setSettings({...settings, yearlySalaries: next});
-                                }} className="text-red-400 p-1"><Trash2 className="w-4 h-4" /></button>
-                             </div>
-                          </div>
-                       ))}
+                       <button onClick={() => handlePullData(userEmail!)} className="flex items-center justify-center gap-2 bg-white text-slate-700 p-4 rounded-2xl font-bold border shadow-sm ios-active"><CloudDownload className="w-4 h-4" /> ดึงข้อมูล</button>
+                       <button onClick={() => handlePushData()} className="flex items-center justify-center gap-2 bg-blue-600 text-white p-4 rounded-2xl font-bold ios-active shadow-lg"><CloudUpload className="w-4 h-4" /> ส่งข้อมูล</button>
                     </div>
                  </div>
               </SettingSection>
 
-              <SettingSection title="ข้อมูลรายได้พื้นฐาน">
-                 <SettingRow label="เงินเดือนพื้นฐาน" value={settings.baseSalary} onChange={v => setSettings({...settings, baseSalary: parseFloat(v) || 0})} />
-                 <SettingRow label="วันทำงาน/เดือน" value={settings.workingDaysPerMonth} onChange={v => setSettings({...settings, workingDaysPerMonth: parseFloat(v) || 1})} />
-                 <SettingRow label="ชม.ทำงาน/วัน" value={settings.workingHoursPerDay} onChange={v => setSettings({...settings, workingHoursPerDay: parseFloat(v) || 1})} />
-              </SettingSection>
-
-              <SettingSection title="สวัสดิการอื่นๆ">
-                 <SettingRow label="ค่าอาหาร" value={settings.foodAllowance} onChange={v => setSettings({...settings, foodAllowance: parseFloat(v) || 0})} />
-                 <SettingRow label="เบี้ยขยัน" value={settings.diligenceAllowance} onChange={v => setSettings({...settings, diligenceAllowance: parseFloat(v) || 0})} />
-                 <SettingRow label="ค่ากะ" value={settings.shiftAllowance} onChange={v => setSettings({...settings, shiftAllowance: parseFloat(v) || 0})} />
-                 <SettingRow label="รายรับพิเศษ" value={settings.specialIncome} onChange={v => setSettings({...settings, specialIncome: parseFloat(v) || 0})} />
-              </SettingSection>
-
-              <SettingSection title="รายการหัก">
-                 <SettingRow label="กองทุนสำรองฯ (%)" value={settings.providentFundRate} onChange={v => setSettings({...settings, providentFundRate: parseFloat(v) || 0})} />
-                 <div className="flex justify-between items-center px-6 py-5">
-                    <label className="text-sm font-bold text-slate-600">หักประกันสังคม (5%)</label>
-                    <button onClick={() => setSettings({...settings, enableSocialSecurity: !settings.enableSocialSecurity})} className={`w-12 h-6 rounded-full transition-colors relative ${settings.enableSocialSecurity ? 'bg-blue-600' : 'bg-slate-200'}`}>
-                      <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${settings.enableSocialSecurity ? 'left-7' : 'left-1'}`}></div>
-                    </button>
-                 </div>
-              </SettingSection>
-
-              <button onClick={handleLogoutAction} className={`w-full p-5 rounded-2xl font-bold border transition-all ${logoutConfirm ? 'bg-red-600 text-white border-red-700' : 'bg-red-50 text-red-600 border-red-100'}`}>
-                {logoutConfirm ? 'ยืนยันออกจากระบบ' : 'ออกจากระบบ / สลับบัญชี'}
-              </button>
+              <button onClick={handleLogoutAction} className={`w-full p-5 rounded-2xl font-bold border transition-all ${logoutConfirm ? 'bg-red-600 text-white border-red-700' : 'bg-red-50 text-red-600 border-red-100'}`}>{logoutConfirm ? 'ยืนยันออกจากระบบ' : 'ออกจากระบบ / สลับบัญชี'}</button>
            </div>
         </div>
       )}
@@ -685,56 +535,11 @@ const App: React.FC = () => {
           <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full duration-500">
               <h3 className="text-2xl font-bold mb-6">บันทึกโอที</h3>
               <form onSubmit={handleAddRecord} className="space-y-6">
-                <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">วันที่ทำงาน</label>
-                   <input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold" />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">ชั่วโมง</label>
-                    <input type="number" step="0.5" value={formData.hours} onChange={e => setFormData({...formData, hours: parseFloat(e.target.value) || 0})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">เรท</label>
-                    <select value={formData.type} onChange={e => setFormData({...formData, type: parseFloat(e.target.value) as OTType})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold">
-                      {OT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <input type="text" placeholder="หมายเหตุ (ถ้ามี)" value={formData.note} onChange={e => setFormData({...formData, note: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold" />
+                <div className="space-y-1"><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">วันที่</label><input type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold" /></div>
+                <div className="grid grid-cols-2 gap-4"><div className="space-y-1"><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">ชั่วโมง</label><input type="number" step="0.5" value={formData.hours} onChange={e => setFormData({...formData, hours: parseFloat(e.target.value) || 0})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold" /></div><div className="space-y-1"><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">เรท</label><select value={formData.type} onChange={e => setFormData({...formData, type: parseFloat(e.target.value) as OTType})} className="w-full bg-slate-50 p-4 rounded-2xl border-0 font-bold">{OT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}</select></div></div>
                 <button type="submit" className="w-full bg-blue-600 text-white p-5 rounded-2xl font-bold shadow-xl ios-active">บันทึกข้อมูล</button>
               </form>
           </div>
-        </div>
-      )}
-
-      {selectedDayInfo && (
-        <div className="fixed inset-0 z-[70] flex items-end justify-center">
-           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setSelectedDayInfo(null)}></div>
-           <div className="relative bg-white w-full max-w-lg rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full max-h-[80vh] overflow-y-auto">
-              <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-6"></div>
-              <div className="flex justify-between items-center mb-6 px-2">
-                 <h3 className="text-xl font-bold text-slate-900">รายละเอียด {parseLocalDate(selectedDayInfo.dateStr).getDate()} {MONTHS_TH[parseLocalDate(selectedDayInfo.dateStr).getMonth()]}</h3>
-                 <button onClick={() => { setIsAdding(true); setFormData({...formData, date: selectedDayInfo.dateStr}); setSelectedDayInfo(null); }} className="p-2 bg-blue-50 text-blue-600 rounded-full ios-active"><Plus className="w-5 h-5" /></button>
-              </div>
-              <div className="space-y-3 pb-12">
-                 {selectedDayInfo.records.map(record => (
-                    <div key={record.id} className="bg-slate-50 p-5 rounded-3xl flex justify-between items-center border border-slate-100 shadow-sm">
-                       <div>
-                          <div className="flex items-center gap-2">
-                             <span className="font-bold text-slate-800 text-lg">{record.hours} ชม.</span>
-                             <span className="text-[10px] bg-white px-2 py-1 rounded-full border border-slate-200 font-bold">x{record.type}</span>
-                          </div>
-                          {record.note && <p className="text-xs font-medium text-slate-500 mt-1">{record.note}</p>}
-                       </div>
-                       <div className="flex items-center gap-4">
-                          <span className="font-bold text-lg text-slate-900">฿{record.totalAmount.toLocaleString()}</span>
-                          <button onClick={() => { setRecords(prev => prev.filter(r => r.id !== record.id)); setSelectedDayInfo(null); }} className="text-red-400 p-2 ios-active"><Trash2 className="w-5 h-5" /></button>
-                       </div>
-                    </div>
-                 ))}
-              </div>
-           </div>
         </div>
       )}
     </div>

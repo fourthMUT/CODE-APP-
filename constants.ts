@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   enableSocialSecurity: true,
   socialSecurityRate: 5,
   socialSecurityMax: 750,
+  monthlyAdjustments: {}
 };
 
 export const MONTHS_TH = [
